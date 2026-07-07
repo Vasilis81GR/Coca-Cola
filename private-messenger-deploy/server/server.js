@@ -29,7 +29,9 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const DATA_DIR = path.join(__dirname, 'data');
+// Persist state to a mounted disk when DATA_DIR is set (survives redeploys),
+// otherwise fall back to a local folder (ephemeral on Render).
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const QUEUE_FILE = path.join(DATA_DIR, 'queue.json');
 const SUBS_FILE = path.join(DATA_DIR, 'subs.json');
 const MAX_QUEUE_PER_USER = 200;       // cap offline backlog per recipient
@@ -40,10 +42,13 @@ const MAX_MSG_BYTES = 12 * 1024 * 1024; // allow encrypted photos (~ up to a few
 const OWNER_TOKEN = process.env.OWNER_TOKEN || '';   // master-only cloud backup gate
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE || '';
+// Apple's web push rejects an invalid VAPID "subject" (e.g. a .local mailto),
+// which is why iOS delivery can fail while Android/FCM accepts it.
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'https://coca-cola-u5p0.onrender.com';
 let PUSH_ENABLED = !!(VAPID_PUBLIC && VAPID_PRIVATE);
 if (PUSH_ENABLED) {
   try {
-    webpush.setVapidDetails('mailto:admin@private-messenger.local', VAPID_PUBLIC, VAPID_PRIVATE);
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
   } catch (e) {
     console.warn('Invalid VAPID keys — push disabled:', e.message);
     PUSH_ENABLED = false;   // bad keys must not crash the server
@@ -89,11 +94,13 @@ function persistSubs() {
   subsTimer = setTimeout(() => fs.writeFile(SUBS_FILE, JSON.stringify(subs), () => {}), 200);
 }
 // Send a CONTENT-LESS push (no sender, no text) — just "you have a new message".
+let lastPushError = null;   // for diagnostics via /healthz
 async function sendPush(id) {
   if (!PUSH_ENABLED || !subs[id]) return;
   try {
     await webpush.sendNotification(subs[id], JSON.stringify({ t: 'msg' }));
   } catch (err) {
+    lastPushError = { at: Date.now(), status: err && err.statusCode, body: err && String(err.body || err.message || '').slice(0, 200) };
     if (err && (err.statusCode === 404 || err.statusCode === 410)) {
       delete subs[id]; persistSubs();   // subscription expired/gone
     }
@@ -130,7 +137,11 @@ app.get('/qr', async (req, res) => {
   }
 });
 
-app.get('/healthz', (_req, res) => res.json({ ok: true, online: clients.size }));
+app.get('/healthz', (_req, res) => res.json({
+  ok: true, online: clients.size,
+  pushEnabled: PUSH_ENABLED, subject: VAPID_SUBJECT,
+  subCount: Object.keys(subs).length, lastPushError,
+}));
 
 // Public VAPID key + whether push is configured on this server.
 app.get('/vapid', (_req, res) => res.json({ enabled: PUSH_ENABLED, key: VAPID_PUBLIC }));
