@@ -1,0 +1,29 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Private Messenger logo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F5333D"/>
+      <stop offset="1" stop-color="#A50F17"/>
+    </linearGradient>
+    <linearGradient id="lock" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E01A22"/>
+      <stop offset="1" stop-color="#B3121B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded red tile -->
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+
+  <!-- white speech bubble with a tail -->
+  <path fill="#ffffff" d="M136 108h240a44 44 0 0 1 44 44v150a44 44 0 0 1-44 44H236l-70 60a10 10 0 0 1-16-8v-52h-14a44 44 0 0 1-44-44V152a44 44 0 0 1 44-44z"/>
+
+  <!-- padlock inside the bubble -->
+  <g transform="translate(256 232)">
+    <!-- shackle -->
+    <path d="M-42-18v-14a42 42 0 0 1 84 0v14" fill="none" stroke="url(#lock)" stroke-width="26" stroke-linecap="round"/>
+    <!-- body -->
+    <rect x="-58" y="-18" width="116" height="96" rx="20" fill="url(#lock)"/>
+    <!-- keyhole -->
+    <circle cx="0" cy="18" r="15" fill="#ffffff"/>
+    <path d="M-9 22h18l-6 34h-6z" fill="#ffffff"/>
+  </g>
+</svg>

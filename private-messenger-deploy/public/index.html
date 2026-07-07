@@ -13,7 +13,7 @@
   <!-- Onboarding -->
   <section id="onboarding" class="screen hidden">
     <div class="card">
-      <div class="logo">🔒</div>
+      <img src="/logo.svg" class="logo-img" alt="Private Messenger" />
       <h1>Private Messenger</h1>
       <p class="muted">Ιδιωτική συνομιλία, end-to-end κρυπτογραφημένη. Πρόσθεσε επαφές μόνο με σάρωση QR.</p>
       <label>Το όνομά σου</label>
@@ -58,11 +58,13 @@
       <div id="messages" class="messages"></div>
       <div id="typing" class="typing hidden"></div>
       <footer class="composer">
+        <button id="attachBtn" class="attach" title="Φωτογραφία">📷</button>
+        <input id="photoInput" type="file" accept="image/*" hidden />
         <input id="msgInput" type="text" placeholder="Μήνυμα…" autocomplete="off" />
         <button id="sendBtn" class="send">➤</button>
       </footer>
       <div id="noPeer" class="placeholder muted">
-        <div class="logo big">🔒</div>
+        <img src="/logo.svg" class="logo-img big" alt="" />
         Διάλεξε μια συνομιλία ή πρόσθεσε επαφή με QR.
       </div>
     </main>
@@ -113,6 +115,14 @@
       <h2 id="peerMenuName"></h2>
       <button id="clearChat" class="ghost">Καθαρισμός συνομιλίας</button>
       <button id="removeContact" class="danger">Διαγραφή επαφής</button>
+      <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <!-- Full-screen photo viewer -->
+  <div id="photoModal" class="modal hidden">
+    <div class="photo-view">
+      <img id="photoFull" alt="φωτογραφία" />
       <button class="ghost close-modal">Κλείσιμο</button>
     </div>
   </div>

@@ -49,6 +49,8 @@ const DB = (() => {
   // messages
   const putMessage = (m) => tx('messages', 'readwrite', s => s.put(m));
   const getMessage = (mid) => tx('messages', 'readonly', s => s.get(mid));
+  const delMessage = (mid) => tx('messages', 'readwrite', s => s.delete(mid));
+  const allMessages = () => tx('messages', 'readonly', s => s.getAll());
   function messagesFor(peer) {
     return open().then(db => new Promise((resolve, reject) => {
       const t = db.transaction('messages', 'readonly');
@@ -75,6 +77,6 @@ const DB = (() => {
   return {
     kvGet, kvSet,
     putContact, getContact, delContact, allContacts,
-    putMessage, getMessage, messagesFor, deleteConversation,
+    putMessage, getMessage, delMessage, allMessages, messagesFor, deleteConversation,
   };
 })();

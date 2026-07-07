@@ -1,9 +1,13 @@
 /*
- * app.js — glue: identity, connection, QR pairing, chat.
+ * app.js — glue: identity, connection, QR pairing, chat, disappearing
+ * messages, photos, count-only notifications + web push.
  */
 (() => {
   const $ = (s) => document.querySelector(s);
   const enc = new TextEncoder(), dec = new TextDecoder();
+  const EPHEMERAL_MS = 30 * 60 * 1000;   // messages vanish 30 min after being read
+  const IMG_MAX = 1024;                   // max photo dimension (px) before sending
+  const IMG_QUALITY = 0.6;
 
   let me = null;                 // { id, name, card, signPriv, dhPriv }
   let ws = null, connected = false, reconnectTimer = null;
@@ -12,6 +16,7 @@
   let currentPeer = null;        // open conversation id
   let scanStream = null, scanRAF = null;
   let pendingAdd = null;         // card awaiting confirmation
+  let vapidKey = null, pushEnabled = false;
 
   // --- utilities ------------------------------------------------------------
   const encodeCard = (card) => C.b64url(enc.encode(JSON.stringify(card)));
@@ -26,10 +31,7 @@
     el.textContent = (name || '?').trim().charAt(0).toUpperCase();
     el.style.background = avatarColor(id || name || 'x');
   }
-  function fmtTime(ts) {
-    const d = new Date(ts);
-    return d.toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
-  }
+  const fmtTime = (ts) => new Date(ts).toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
   function fmtDay(ts) {
     const d = new Date(ts), now = new Date();
     if (d.toDateString() === now.toDateString()) return 'Σήμερα';
@@ -42,6 +44,7 @@
     const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2600);
   }
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   // --- identity -------------------------------------------------------------
   async function loadOrCreateIdentity() {
@@ -55,8 +58,6 @@
     me = { id: card.id, name, card, signPriv: bundle.signPriv, dhPriv: bundle.dhPriv };
     await DB.kvSet('identity', me);
   }
-
-  // --- per-contact key ------------------------------------------------------
   async function keyFor(peer) {
     if (keyCache.has(peer.id)) return keyCache.get(peer.id);
     const k = await C.deriveKey(me.dhPriv, peer.epk, me.id, peer.id);
@@ -70,35 +71,23 @@
     const url = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
     ws = new WebSocket(url);
     setConn('σύνδεση…');
-
     ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', id: me.id, spk: me.card.spk }));
-
     ws.onmessage = async (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'challenge') {
-        const sig = await C.signNonce(me.signPriv, m.nonce);
-        ws.send(JSON.stringify({ type: 'auth', sig }));
+        ws.send(JSON.stringify({ type: 'auth', sig: await C.signNonce(me.signPriv, m.nonce) }));
       } else if (m.type === 'ready') {
         connected = true; setConn('συνδεδεμένος');
         resendPending();
+        registerPush();
         if (currentPeer) probePresence(currentPeer);
-      } else if (m.type === 'msg') {
-        await onIncoming(m);
-      } else if (m.type === 'ack') {
-        await onAck(m);
-      } else if (m.type === 'typing') {
-        if (m.from === currentPeer) showTyping(m.on);
-      } else if (m.type === 'read') {
-        await onReadReceipt(m);
-      } else if (m.type === 'presence') {
-        if (m.id === currentPeer) $('#peerState').textContent = m.online ? 'online' : 'εκτός σύνδεσης';
-      }
+      } else if (m.type === 'msg') { await onIncoming(m); }
+      else if (m.type === 'ack') { await onAck(m); }
+      else if (m.type === 'typing') { if (m.from === currentPeer) showTyping(m.on); }
+      else if (m.type === 'read') { await onReadReceipt(m); }
+      else if (m.type === 'presence') { if (m.id === currentPeer) $('#peerState').textContent = m.online ? 'online' : 'εκτός σύνδεσης'; }
     };
-
-    ws.onclose = () => {
-      connected = false; setConn('εκτός σύνδεσης');
-      reconnectTimer = setTimeout(connect, 2500);
-    };
+    ws.onclose = () => { connected = false; setConn('εκτός σύνδεσης'); reconnectTimer = setTimeout(connect, 2500); };
     ws.onerror = () => { try { ws.close(); } catch {} };
   }
   function wsSend(obj) { if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(obj)); return true; } return false; }
@@ -106,29 +95,36 @@
   function probePresence(id) { wsSend({ type: 'ping-presence', id }); }
 
   // --- sending --------------------------------------------------------------
-  async function sendMessage(text) {
+  async function sendText(text) {
     const peer = contacts.get(currentPeer);
     if (!peer || !text.trim()) return;
     const mid = crypto.randomUUID();
-    const msg = { mid, peer: peer.id, dir: 'out', text, ts: Date.now(), status: 'sending' };
+    const msg = { mid, peer: peer.id, dir: 'out', kind: 'text', text, ts: Date.now(), status: 'sending' };
     await DB.putMessage(msg);
     appendMessage(msg); scrollDown();
-    await bumpContact(peer.id, text, msg.ts);
-    const key = await keyFor(peer);
-    const ct = await C.encrypt(key, text);
-    if (!wsSend({ type: 'msg', to: peer.id, mid, ct })) {
-      // offline: stays 'sending', resent on reconnect
-    }
+    await bumpContact(peer.id, 'Μήνυμα', msg.ts);
+    const ct = await C.encrypt(await keyFor(peer), text);
+    wsSend({ type: 'msg', to: peer.id, mid, kind: 'text', ct });
+  }
+  async function sendImage(dataUrl) {
+    const peer = contacts.get(currentPeer);
+    if (!peer) return;
+    const mid = crypto.randomUUID();
+    const msg = { mid, peer: peer.id, dir: 'out', kind: 'image', img: dataUrl, ts: Date.now(), status: 'sending' };
+    await DB.putMessage(msg);
+    appendMessage(msg); scrollDown();
+    await bumpContact(peer.id, '📷 Φωτογραφία', msg.ts);
+    const ct = await C.encrypt(await keyFor(peer), dataUrl);
+    wsSend({ type: 'msg', to: peer.id, mid, kind: 'image', ct });
   }
   async function resendPending() {
-    // resend any outgoing messages that never got an ack
     for (const peer of contacts.values()) {
       const msgs = await DB.messagesFor(peer.id);
       for (const m of msgs) {
         if (m.dir === 'out' && m.status === 'sending') {
-          const key = await keyFor(peer);
-          const ct = await C.encrypt(key, m.text);
-          wsSend({ type: 'msg', to: peer.id, mid: m.mid, ct });
+          const payload = m.kind === 'image' ? m.img : m.text;
+          const ct = await C.encrypt(await keyFor(peer), payload);
+          wsSend({ type: 'msg', to: peer.id, mid: m.mid, kind: m.kind, ct });
         }
       }
     }
@@ -137,42 +133,124 @@
     const msg = await DB.getMessage(m.mid);
     if (!msg) return;
     msg.status = m.status === 'delivered' ? 'delivered' : 'queued';
-    await DB.putMessage(msg);
-    updateTick(msg);
+    await DB.putMessage(msg); updateTick(msg);
   }
   async function onReadReceipt(m) {
     for (const mid of (m.mids || [])) {
       const msg = await DB.getMessage(mid);
-      if (msg && msg.dir === 'out') { msg.status = 'read'; await DB.putMessage(msg); updateTick(msg); }
+      if (msg && msg.dir === 'out') {
+        msg.status = 'read';
+        if (!msg.expireAt) { msg.readAt = Date.now(); msg.expireAt = msg.readAt + EPHEMERAL_MS; }
+        await DB.putMessage(msg); updateTick(msg); markExpiring(msg);
+      }
     }
   }
 
   // --- receiving ------------------------------------------------------------
   async function onIncoming(m) {
     const peer = contacts.get(m.from);
-    if (!peer) return; // message from someone not in your contacts -> ignored
-    let text;
-    try { text = await C.decrypt(await keyFor(peer), m.ct); }
-    catch { text = '⚠️ (αποτυχία αποκρυπτογράφησης)'; }
-    const msg = { mid: m.mid || crypto.randomUUID(), peer: peer.id, dir: 'in', text, ts: m.ts || Date.now() };
+    if (!peer) return;                 // not a contact -> ignore
+    let payload;
+    try { payload = await C.decrypt(await keyFor(peer), m.ct); }
+    catch { payload = null; }
+    const kind = m.kind === 'image' ? 'image' : 'text';
+    const msg = { mid: m.mid || crypto.randomUUID(), peer: peer.id, dir: 'in', kind, ts: m.ts || Date.now() };
+    if (kind === 'image') msg.img = payload || '';
+    else msg.text = payload == null ? '⚠️ (αποτυχία αποκρυπτογράφησης)' : payload;
     await DB.putMessage(msg);
-    await bumpContact(peer.id, text, msg.ts, currentPeer !== peer.id);
-    if (currentPeer === peer.id) {
+
+    if (currentPeer === peer.id && !document.hidden) {
       appendMessage(msg); scrollDown();
-      wsSend({ type: 'read', to: peer.id, mids: [msg.mid] });
+      markRead(peer.id, [msg]);        // seen immediately -> starts the 30' timer
     } else {
-      toast(`${peer.name}: ${text.slice(0, 40)}`);
-      notify(peer.name, text);
+      await bumpContact(peer.id, kind === 'image' ? '📷 Φωτογραφία' : 'Μήνυμα', msg.ts, true);
+      notifyCount();
     }
   }
 
-  function notify(title, body) {
+  // --- disappearing messages ------------------------------------------------
+  // Mark given incoming messages as read: start their 30' countdown + tell sender.
+  async function markRead(peerId, msgs) {
+    const mids = [];
+    for (const msg of msgs) {
+      if (msg.dir !== 'in') continue;
+      if (!msg.expireAt) {
+        msg.readAt = Date.now(); msg.expireAt = msg.readAt + EPHEMERAL_MS;
+        await DB.putMessage(msg); markExpiring(msg);
+      }
+      mids.push(msg.mid);
+    }
+    if (mids.length) wsSend({ type: 'read', to: peerId, mids });
+  }
+  // Reflect an expireAt onto the DOM node so the ticker shows a countdown.
+  function markExpiring(msg) {
+    const el = document.querySelector(`.msg[data-mid="${msg.mid}"]`);
+    if (el && msg.expireAt) el.dataset.expire = msg.expireAt;
+  }
+  async function purgeMessage(mid) {
+    await DB.delMessage(mid);
+    const el = document.querySelector(`.msg[data-mid="${mid}"]`);
+    if (el) el.remove();
+  }
+  // One global 1s ticker updates every visible countdown and deletes at zero.
+  setInterval(() => {
+    const now = Date.now();
+    document.querySelectorAll('.msg[data-expire]').forEach((el) => {
+      const exp = +el.dataset.expire;
+      const left = exp - now;
+      const cd = el.querySelector('.countdown');
+      if (left <= 0) { purgeMessage(el.dataset.mid); return; }
+      if (cd) { const s = Math.ceil(left / 1000); cd.textContent = `⏱ ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+    });
+  }, 1000);
+  // Periodic + on-load sweep also clears expired messages in closed conversations.
+  async function sweepExpired() {
+    const now = Date.now();
+    for (const m of await DB.allMessages()) if (m.expireAt && m.expireAt <= now) await DB.delMessage(m.mid);
+  }
+  setInterval(sweepExpired, 15000);
+
+  // --- notifications (COUNT ONLY — never reveals sender or text) ------------
+  function unreadTotal() { let n = 0; for (const c of contacts.values()) n += (c.unread || 0); return n; }
+  function notifyCount() {
+    const n = unreadTotal();
+    updateBadge(n);
+    toast(n === 1 ? '1 νέο μήνυμα' : `${n} νέα μηνύματα`);
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      try { new Notification(title, { body, icon: '/icons/icon-192.png' }); } catch {}
+      try { new Notification('🔒 Private Messenger', { body: n === 1 ? '1 νέο μήνυμα' : `${n} νέα μηνύματα`, icon: '/icons/icon-192.png', tag: 'pm-count', renotify: true }); } catch {}
     }
   }
+  function updateBadge(n) {
+    try { if (n > 0) navigator.setAppBadge && navigator.setAppBadge(n); else navigator.clearAppBadge && navigator.clearAppBadge(); } catch {}
+  }
 
-  // --- contacts model + list ------------------------------------------------
+  // --- web push (content-less) ----------------------------------------------
+  async function registerPush() {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+      if (vapidKey === null) {
+        const r = await fetch('/vapid').then(x => x.json()).catch(() => null);
+        pushEnabled = !!(r && r.enabled); vapidKey = r && r.key ? r.key : '';
+      }
+      if (!pushEnabled || !vapidKey) return;
+      if (Notification.permission !== 'granted') {
+        const p = await Notification.requestPermission(); if (p !== 'granted') return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(vapidKey) });
+      wsSend({ type: 'push-subscribe', sub: sub.toJSON ? sub.toJSON() : sub });
+    } catch (e) { /* push optional */ }
+  }
+  function urlB64ToU8(b64) {
+    const pad = '='.repeat((4 - b64.length % 4) % 4);
+    const s = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(s); const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  // --- contacts -------------------------------------------------------------
   async function loadContacts() {
     const list = await DB.allContacts();
     contacts = new Map(list.map(c => [c.id, c]));
@@ -182,8 +260,7 @@
     const c = contacts.get(id); if (!c) return;
     c.last = last; c.lastTs = ts;
     if (unread) c.unread = (c.unread || 0) + 1;
-    await DB.putContact(c);
-    renderContacts();
+    await DB.putContact(c); renderContacts();
   }
   function renderContacts() {
     const wrap = $('#contactList'); wrap.innerHTML = '';
@@ -213,6 +290,7 @@
     currentPeer = id;
     const peer = contacts.get(id);
     peer.unread = 0; await DB.putContact(peer);
+    updateBadge(unreadTotal());
     $('#chat').classList.remove('no-peer');
     $('#app').classList.add('show-chat');
     $('#peerName').textContent = peer.name;
@@ -222,38 +300,33 @@
     const msgs = await DB.messagesFor(id);
     const box = $('#messages'); box.innerHTML = '';
     let lastDay = '';
-    const unreadMids = [];
     for (const m of msgs) {
       const day = fmtDay(m.ts);
       if (day !== lastDay) { addDaySep(day); lastDay = day; }
       appendMessage(m);
-      if (m.dir === 'in') unreadMids.push(m.mid);
     }
-    scrollDown();
-    renderContacts();
-    if (unreadMids.length) wsSend({ type: 'read', to: id, mids: unreadMids });
+    scrollDown(); renderContacts();
+    markRead(id, msgs.filter(m => m.dir === 'in'));   // opening = reading -> timers start
   }
+  function addDaySep(text) { const d = document.createElement('div'); d.className = 'daysep'; d.textContent = text; $('#messages').appendChild(d); }
 
-  function addDaySep(text) {
-    const d = document.createElement('div'); d.className = 'daysep'; d.textContent = text;
-    $('#messages').appendChild(d);
-  }
   function appendMessage(m) {
     const el = document.createElement('div');
     el.className = 'msg ' + m.dir; el.dataset.mid = m.mid;
-    el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>
-      <div class="meta">${fmtTime(m.ts)}${m.dir === 'out' ? `<span class="tick">${tick(m.status)}</span>` : ''}</div>`;
+    if (m.expireAt) el.dataset.expire = m.expireAt;
+    let body;
+    if (m.kind === 'image') body = `<img class="photo" src="${m.img || ''}" alt="φωτογραφία" />`;
+    else body = `<div class="body">${escapeHtml(m.text || '')}</div>`;
+    el.innerHTML = `${body}
+      <div class="meta">${fmtTime(m.ts)}${m.dir === 'out' ? `<span class="tick">${tick(m.status)}</span>` : ''}</div>
+      <div class="countdown"></div>`;
+    if (m.kind === 'image') { const img = el.querySelector('.photo'); img.onclick = () => openPhoto(m.img); }
     $('#messages').appendChild(el);
   }
-  function tick(status) {
-    if (status === 'read') return '✓✓';
-    if (status === 'delivered') return '✓✓';
-    if (status === 'queued') return '✓';
-    return '🕓';
-  }
+  function tick(status) { if (status === 'read') return '✓✓'; if (status === 'delivered') return '✓✓'; if (status === 'queued') return '✓'; return '🕓'; }
   function updateTick(msg) {
     const el = document.querySelector(`.msg[data-mid="${msg.mid}"] .tick`);
-    if (el) { el.textContent = tick(msg.status); el.style.color = msg.status === 'read' ? '#8fd' : ''; }
+    if (el) { el.textContent = tick(msg.status); el.style.color = msg.status === 'read' ? '#ffd7d9' : ''; }
   }
   function scrollDown() { const b = $('#messages'); b.scrollTop = b.scrollHeight; }
   let typingHideTimer;
@@ -262,25 +335,39 @@
     if (on) { t.textContent = 'πληκτρολογεί…'; t.classList.remove('hidden'); clearTimeout(typingHideTimer); typingHideTimer = setTimeout(() => t.classList.add('hidden'), 4000); }
     else t.classList.add('hidden');
   }
+  function openPhoto(src) { if (!src) return; $('#photoFull').src = src; $('#photoModal').classList.remove('hidden'); }
 
-  // --- QR: show mine --------------------------------------------------------
+  // --- image compression ----------------------------------------------------
+  function fileToCompressedDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width: w, height: h } = img;
+        if (w > h && w > IMG_MAX) { h = Math.round(h * IMG_MAX / w); w = IMG_MAX; }
+        else if (h >= w && h > IMG_MAX) { w = Math.round(w * IMG_MAX / h); h = IMG_MAX; }
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        cv.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve(cv.toDataURL('image/jpeg', IMG_QUALITY));
+      };
+      img.onerror = reject;
+      const fr = new FileReader();
+      fr.onload = () => { img.src = fr.result; };
+      fr.onerror = reject; fr.readAsDataURL(file);
+    });
+  }
+
+  // --- QR: show / scan / add ------------------------------------------------
   function showMyQr() {
     $('#qrImg').src = '/qr?data=' + encodeURIComponent(identityLink(me.card));
     $('#myIdShort').textContent = 'ID: ' + me.id;
     $('#qrModal').classList.remove('hidden');
   }
-
-  // --- QR: scan -------------------------------------------------------------
   async function startScan() {
-    $('#scanModal').classList.remove('hidden');
-    $('#scanStatus').textContent = '';
+    $('#scanModal').classList.remove('hidden'); $('#scanStatus').textContent = '';
     try {
       scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      const v = $('#scanVideo'); v.srcObject = scanStream; await v.play();
-      scanLoop();
-    } catch (e) {
-      $('#scanStatus').textContent = 'Δεν έχω πρόσβαση στην κάμερα. Έλεγξε τα permissions (χρειάζεται HTTPS).';
-    }
+      const v = $('#scanVideo'); v.srcObject = scanStream; await v.play(); scanLoop();
+    } catch (e) { $('#scanStatus').textContent = 'Δεν έχω πρόσβαση στην κάμερα (χρειάζεται HTTPS + άδεια).'; }
   }
   function scanLoop() {
     const v = $('#scanVideo');
@@ -299,28 +386,12 @@
     };
     scanRAF = requestAnimationFrame(tick);
   }
-  function stopScan() {
-    if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null;
-    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
-  }
-  function handleScanned(data) {
-    stopScan(); $('#scanModal').classList.add('hidden');
-    const card = parseIdentity(data);
-    if (!card) return toast('Μη έγκυρο QR.');
-    promptAdd(card);
-  }
+  function stopScan() { if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null; if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } }
+  function handleScanned(data) { stopScan(); $('#scanModal').classList.add('hidden'); const card = parseIdentity(data); if (!card) return toast('Μη έγκυρο QR.'); promptAdd(card); }
   function parseIdentity(data) {
-    try {
-      let payload = data;
-      const i = data.indexOf('#add=');
-      if (i >= 0) payload = data.slice(i + 5);
-      const card = decodeCard(payload);
-      if (card && card.spk && card.epk && card.id) return card;
-    } catch {}
+    try { let p = data; const i = data.indexOf('#add='); if (i >= 0) p = data.slice(i + 5); const card = decodeCard(p); if (card && card.spk && card.epk && card.id) return card; } catch {}
     return null;
   }
-
-  // --- add contact ----------------------------------------------------------
   function promptAdd(card) {
     if (card.id === me.id) return toast('Αυτό είναι το δικό σου QR 🙂');
     pendingAdd = card;
@@ -332,74 +403,61 @@
   }
   async function confirmAdd() {
     if (!pendingAdd) return;
-    const existing = contacts.get(pendingAdd.id) || {};
-    const c = { id: pendingAdd.id, name: pendingAdd.n || 'Χωρίς όνομα', spk: pendingAdd.spk, epk: pendingAdd.epk,
-      addedAt: existing.addedAt || Date.now(), last: existing.last, lastTs: existing.lastTs, unread: existing.unread };
-    keyCache.delete(c.id);
-    await DB.putContact(c);
-    contacts.set(c.id, c);
-    $('#addModal').classList.add('hidden'); pendingAdd = null;
-    renderContacts();
-    toast('Η επαφή προστέθηκε.');
-    openConversation(c.id);
+    const ex = contacts.get(pendingAdd.id) || {};
+    const c = { id: pendingAdd.id, name: pendingAdd.n || 'Χωρίς όνομα', spk: pendingAdd.spk, epk: pendingAdd.epk, addedAt: ex.addedAt || Date.now(), last: ex.last, lastTs: ex.lastTs, unread: ex.unread };
+    keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
+    $('#addModal').classList.add('hidden'); pendingAdd = null; renderContacts();
+    toast('Η επαφή προστέθηκε.'); openConversation(c.id);
   }
-
-  // --- escape ---------------------------------------------------------------
-  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   // --- events ---------------------------------------------------------------
   function wireEvents() {
     $('#createIdentity').onclick = async () => {
       const name = $('#nameInput').value.trim() || 'Anonymous';
-      $('#createIdentity').disabled = true;
-      await createIdentity(name);
-      await startApp();
+      $('#createIdentity').disabled = true; await createIdentity(name); await startApp();
     };
     $('#nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#createIdentity').click(); });
-
     $('#showQrBtn').onclick = showMyQr;
     $('#scanBtn').onclick = startScan;
     $('#confirmAdd').onclick = confirmAdd;
     $('#backBtn').onclick = () => { $('#app').classList.remove('show-chat'); currentPeer = null; renderContacts(); };
+    document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => { stopScan(); b.closest('.modal').classList.add('hidden'); });
 
-    document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => {
-      stopScan();
-      b.closest('.modal').classList.add('hidden');
-    });
-
-    $('#sendBtn').onclick = () => { const i = $('#msgInput'); const v = i.value; i.value = ''; i.focus(); if (v.trim()) sendMessage(v); };
+    $('#sendBtn').onclick = () => { const i = $('#msgInput'); const v = i.value; i.value = ''; i.focus(); if (v.trim()) sendText(v); };
     $('#msgInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#sendBtn').click(); });
     let typingSent = 0;
     $('#msgInput').addEventListener('input', () => {
-      if (!currentPeer) return;
-      const now = Date.now();
+      if (!currentPeer) return; const now = Date.now();
       if (now - typingSent > 2000) { wsSend({ type: 'typing', to: currentPeer, on: true }); typingSent = now; }
     });
+    // photo attach
+    $('#attachBtn').onclick = () => $('#photoInput').click();
+    $('#photoInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0]; e.target.value = '';
+      if (!file || !currentPeer) return;
+      try { const dataUrl = await fileToCompressedDataUrl(file); await sendImage(dataUrl); }
+      catch { toast('Δεν μπόρεσα να επεξεργαστώ τη φωτογραφία.'); }
+    });
 
-    $('#peerMenuBtn').onclick = () => {
-      if (!currentPeer) return;
-      $('#peerMenuName').textContent = contacts.get(currentPeer).name;
-      $('#peerMenu').classList.remove('hidden');
-    };
+    $('#peerMenuBtn').onclick = () => { if (!currentPeer) return; $('#peerMenuName').textContent = contacts.get(currentPeer).name; $('#peerMenu').classList.remove('hidden'); };
     $('#clearChat').onclick = async () => {
       if (!currentPeer) return;
       await DB.deleteConversation(currentPeer);
       const c = contacts.get(currentPeer); c.last = null; c.lastTs = null; await DB.putContact(c);
-      $('#messages').innerHTML = ''; $('#peerMenu').classList.add('hidden'); renderContacts();
-      toast('Η συνομιλία καθαρίστηκε.');
+      $('#messages').innerHTML = ''; $('#peerMenu').classList.add('hidden'); renderContacts(); toast('Η συνομιλία καθαρίστηκε.');
     };
     $('#removeContact').onclick = async () => {
-      if (!currentPeer) return;
-      const id = currentPeer;
+      if (!currentPeer) return; const id = currentPeer;
       await DB.deleteConversation(id); await DB.delContact(id);
       contacts.delete(id); keyCache.delete(id);
       currentPeer = null; $('#chat').classList.add('no-peer'); $('#app').classList.remove('show-chat');
-      $('#peerMenu').classList.add('hidden'); renderContacts();
-      toast('Η επαφή διαγράφηκε.');
+      $('#peerMenu').classList.add('hidden'); renderContacts(); toast('Η επαφή διαγράφηκε.');
     };
-
-    // deep link: opened via scanned link (#add=...)
     window.addEventListener('hashchange', handleHashAdd);
+    // when app regains focus with a conversation open, mark visible incoming as read
+    document.addEventListener('visibilitychange', async () => {
+      if (!document.hidden && currentPeer) { const msgs = await DB.messagesFor(currentPeer); markRead(currentPeer, msgs.filter(m => m.dir === 'in')); }
+    });
   }
   function handleHashAdd() {
     if (location.hash.startsWith('#add=')) {
@@ -415,20 +473,17 @@
     $('#app').classList.remove('hidden');
     setAvatar($('#myAvatar'), me.name, me.id);
     $('#myName').textContent = me.name;
+    await sweepExpired();
     await loadContacts();
+    updateBadge(unreadTotal());
     connect();
-    if ('Notification' in window && Notification.permission === 'default') {
-      setTimeout(() => Notification.requestPermission().catch(() => {}), 3000);
-    }
     handleHashAdd();
   }
-
   async function main() {
     wireEvents();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
     const has = await loadOrCreateIdentity();
-    if (has) await startApp();
-    else $('#onboarding').classList.remove('hidden');
+    if (has) await startApp(); else $('#onboarding').classList.remove('hidden');
   }
   main();
 })();

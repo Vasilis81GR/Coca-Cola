@@ -1,7 +1,7 @@
 :root{
   --bg:#0f1420; --panel:#161c2b; --panel2:#1e2638; --line:#28324a;
-  --text:#e8ecf5; --muted:#8b96ad; --accent:#6c8cff; --accent2:#4f6ef7;
-  --in:#222c42; --out:#3a54c9; --danger:#ff5a5f; --ok:#37d67a;
+  --text:#e8ecf5; --muted:#8b96ad; --accent:#ff5a63; --accent2:#e01a22;
+  --in:#222c42; --out:#c8121b; --danger:#ff5a5f; --ok:#37d67a;
   --radius:16px; --safe-b:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -33,6 +33,8 @@ input:focus{border-color:var(--accent)}
 #onboarding label{display:block;text-align:left;margin:18px 0 6px;font-size:13px;color:var(--muted)}
 #onboarding .primary{width:100%;margin-top:16px}
 .logo{font-size:40px}.logo.big{font-size:56px;opacity:.5}
+.logo-img{width:76px;height:76px;border-radius:20px;display:block;margin:0 auto}
+.logo-img.big{width:100px;height:100px;opacity:.92;border-radius:26px}
 
 /* App layout */
 #app{display:flex}
@@ -69,11 +71,19 @@ input:focus{border-color:var(--accent)}
 .msg.out{align-self:flex-end;background:var(--out);border-bottom-right-radius:5px}
 .msg .meta{font-size:10px;color:rgba(255,255,255,.6);margin-top:3px;text-align:right}
 .msg .tick{margin-left:4px}
+.msg .photo{max-width:230px;max-height:300px;border-radius:12px;display:block;cursor:pointer}
+.msg .countdown{font-size:10px;margin-top:2px;text-align:right;opacity:.85}
+.msg.out .countdown{color:#ffd7d9}
+.msg.in .countdown{color:var(--muted)}
+.msg .countdown:empty{display:none}
 .daysep{align-self:center;font-size:11px;color:var(--muted);background:var(--panel2);padding:3px 10px;border-radius:10px;margin:8px 0}
 .typing{padding:4px 18px 8px;font-size:13px;color:var(--muted)}
 .composer{display:flex;gap:8px;padding:10px 12px;padding-bottom:calc(10px + var(--safe-b));border-top:1px solid var(--line);background:var(--panel)}
-.composer input{border-radius:22px}
+.composer input[type=text]{border-radius:22px}
+.composer .attach{background:transparent;font-size:22px;width:44px;height:46px;flex:none;padding:0}
 .send{background:var(--accent2);color:#fff;width:46px;height:46px;flex:none;border-radius:50%;padding:0;font-size:18px}
+.photo-view{display:flex;flex-direction:column;align-items:center;gap:14px;max-width:100%}
+.photo-view img{max-width:92vw;max-height:80vh;border-radius:12px}
 .placeholder{padding:24px;text-align:center}
 
 /* Modals */

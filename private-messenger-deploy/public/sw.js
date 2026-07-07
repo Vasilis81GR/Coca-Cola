@@ -3,10 +3,10 @@
  * offline (you can read old messages; sending needs a connection).
  * Bump CACHE when you change any static file.
  */
-const CACHE = 'pm-v1';
+const CACHE = 'pm-v3';
 const SHELL = [
   '/', '/index.html', '/style.css', '/crypto.js', '/db.js', '/app.js',
-  '/vendor/jsQR.js', '/manifest.json',
+  '/vendor/jsQR.js', '/manifest.json', '/logo.svg',
   '/icons/icon-192.png', '/icons/icon-512.png'
 ];
 
@@ -19,6 +19,24 @@ self.addEventListener('activate', (e) => {
     caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Content-less push: the payload never contains sender or text — just a nudge.
+self.addEventListener('push', (e) => {
+  let count = '';
+  try { const d = e.data ? e.data.json() : {}; count = d && d.n ? d.n : ''; } catch (_) {}
+  const body = count ? `${count} νέα μηνύματα` : 'Έχεις νέο μήνυμα';
+  e.waitUntil(self.registration.showNotification('🔒 Private Messenger', {
+    body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png', tag: 'pm-push', renotify: true
+  }));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    for (const c of list) { if ('focus' in c) return c.focus(); }
+    if (clients.openWindow) return clients.openWindow('/');
+  }));
 });
 
 self.addEventListener('fetch', (e) => {
