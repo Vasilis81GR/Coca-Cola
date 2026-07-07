@@ -24,14 +24,25 @@ const http = require('http');
 const crypto = require('crypto');
 const express = require('express');
 const qrcode = require('qrcode');
+const webpush = require('web-push');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const QUEUE_FILE = path.join(DATA_DIR, 'queue.json');
-const MAX_QUEUE_PER_USER = 500;      // cap offline backlog per recipient
-const MAX_MSG_BYTES = 64 * 1024;      // reject absurdly large frames
+const SUBS_FILE = path.join(DATA_DIR, 'subs.json');
+const MAX_QUEUE_PER_USER = 200;       // cap offline backlog per recipient
+const MAX_MSG_BYTES = 12 * 1024 * 1024; // allow encrypted photos (~ up to a few MB)
+
+// Web Push (content-less notifications). Keys come from env so the private key
+// is never committed. If absent, push is simply disabled.
+const VAPID_PUBLIC = process.env.VAPID_PUBLIC || '';
+const VAPID_PRIVATE = process.env.VAPID_PRIVATE || '';
+const PUSH_ENABLED = !!(VAPID_PUBLIC && VAPID_PRIVATE);
+if (PUSH_ENABLED) {
+  webpush.setVapidDetails('mailto:admin@private-messenger.local', VAPID_PUBLIC, VAPID_PRIVATE);
+}
 
 // ---------------------------------------------------------------------------
 // Offline queue (file-backed)
@@ -63,6 +74,26 @@ function drain(id) {
   return items;
 }
 
+// --- Push subscriptions (file-backed) --------------------------------------
+let subs = {};   // { userId: PushSubscription }
+try { subs = JSON.parse(fs.readFileSync(SUBS_FILE, 'utf8')); } catch (_) { subs = {}; }
+let subsTimer = null;
+function persistSubs() {
+  clearTimeout(subsTimer);
+  subsTimer = setTimeout(() => fs.writeFile(SUBS_FILE, JSON.stringify(subs), () => {}), 200);
+}
+// Send a CONTENT-LESS push (no sender, no text) — just "you have a new message".
+async function sendPush(id) {
+  if (!PUSH_ENABLED || !subs[id]) return;
+  try {
+    await webpush.sendNotification(subs[id], JSON.stringify({ t: 'msg' }));
+  } catch (err) {
+    if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+      delete subs[id]; persistSubs();   // subscription expired/gone
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP + static + QR helper
 // ---------------------------------------------------------------------------
@@ -83,6 +114,9 @@ app.get('/qr', async (req, res) => {
 });
 
 app.get('/healthz', (_req, res) => res.json({ ok: true, online: clients.size }));
+
+// Public VAPID key + whether push is configured on this server.
+app.get('/vapid', (_req, res) => res.json({ enabled: PUSH_ENABLED, key: VAPID_PUBLIC }));
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
@@ -178,10 +212,16 @@ wss.on('connection', (ws) => {
     // --- Relay an end-to-end encrypted message. Body is opaque to us.
     if (msg.type === 'msg') {
       if (typeof msg.to !== 'string' || typeof msg.ct !== 'object') return;
-      const env = { type: 'msg', from: ws.id, to: msg.to, ts: Date.now(), mid: msg.mid || null, ct: msg.ct };
+      const env = { type: 'msg', from: ws.id, to: msg.to, ts: Date.now(), mid: msg.mid || null, kind: msg.kind || 'text', ct: msg.ct };
       const dest = clients.get(msg.to);
       if (dest) { send(dest, env); send(ws, { type: 'ack', mid: env.mid, status: 'delivered' }); }
-      else { enqueue(msg.to, env); send(ws, { type: 'ack', mid: env.mid, status: 'queued' }); }
+      else { enqueue(msg.to, env); send(ws, { type: 'ack', mid: env.mid, status: 'queued' }); sendPush(msg.to); }
+      return;
+    }
+
+    // --- Register/refresh a Web Push subscription for this user.
+    if (msg.type === 'push-subscribe') {
+      if (msg.sub && typeof msg.sub === 'object') { subs[ws.id] = msg.sub; persistSubs(); }
       return;
     }
 
