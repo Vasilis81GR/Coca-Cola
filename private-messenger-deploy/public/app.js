@@ -378,8 +378,10 @@
 
   // --- QR: show / scan / add ------------------------------------------------
   function showMyQr() {
-    $('#qrImg').src = '/qr?data=' + encodeURIComponent(identityLink(me.card));
+    const link = identityLink(me.card);
+    $('#qrImg').src = '/qr?data=' + encodeURIComponent(link);
     $('#myIdShort').textContent = 'ID: ' + me.id;
+    const lf = $('#linkField'); if (lf) { lf.value = link; lf.onclick = () => { lf.select(); }; }
     $('#qrModal').classList.remove('hidden');
   }
   async function startScan() {

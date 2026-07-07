@@ -35,6 +35,7 @@ input:focus{border-color:var(--accent)}
 #lock .name{margin:6px 0;font-size:16px}
 .install-qr{width:150px;height:150px;background:#fff;padding:8px;border-radius:12px;display:block;margin:0 auto 6px}
 .err{color:var(--danger);margin-top:10px}
+.linkfield{width:100%;font-size:11px;padding:9px;margin:10px 0 4px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--text);font-family:ui-monospace,Menlo,monospace}
 .logo{font-size:40px}.logo.big{font-size:56px;opacity:.5}
 .logo-img{width:76px;height:76px;border-radius:20px;display:block;margin:0 auto}
 .logo-img.big{width:100px;height:100px;opacity:.92;border-radius:26px}
