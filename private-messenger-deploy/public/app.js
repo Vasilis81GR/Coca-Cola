@@ -97,6 +97,7 @@
       } else if (m.type === 'ready') {
         connected = true; setConn('συνδεδεμένος');
         resendPending();
+        flushIntroduce();
         registerPush();
         if (currentPeer) probePresence(currentPeer);
       } else if (m.type === 'msg') { await onIncoming(m); }
@@ -406,6 +407,24 @@
     scanRAF = requestAnimationFrame(tick);
   }
   function stopScan() { if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null; if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; } }
+  // Decode a QR code from an uploaded image file (gallery / received photo).
+  function decodeQrFromFile(file) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+        cv.getContext('2d').drawImage(img, 0, 0);
+        try {
+          const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height);
+          const code = jsQR(d.data, d.width, d.height);
+          resolve(code && code.data ? code.data : null);
+        } catch { resolve(null); }
+      };
+      img.onerror = () => resolve(null);
+      const fr = new FileReader(); fr.onload = () => { img.src = fr.result; }; fr.onerror = () => resolve(null); fr.readAsDataURL(file);
+    });
+  }
   function handleScanned(data) { stopScan(); $('#scanModal').classList.add('hidden'); const card = parseIdentity(data); if (!card) return toast('Μη έγκυρο QR.'); promptAdd(card); }
   function parseIdentity(data) {
     try { let p = data; const i = data.indexOf('#add='); if (i >= 0) p = data.slice(i + 5); const card = decodeCard(p); if (card && card.spk && card.epk && card.id) return card; } catch {}
@@ -426,11 +445,15 @@
     const c = { id: pendingAdd.id, name: pendingAdd.n || 'Χωρίς όνομα', spk: pendingAdd.spk, epk: pendingAdd.epk, addedAt: ex.addedAt || Date.now(), last: ex.last, lastTs: ex.lastTs, unread: ex.unread };
     keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
     // Mutual add: tell the other side to add me too (so only one scan is needed).
-    wsSend({ type: 'introduce', to: c.id, card: me.card });
+    sendIntroduce(c.id);
     scheduleCloudBackup();
     $('#addModal').classList.add('hidden'); pendingAdd = null; renderContacts();
     toast('Η επαφή προστέθηκε.'); openConversation(c.id);
   }
+  // Send an "introduce" (mutual add); if offline, retry when the socket is ready.
+  const pendingIntro = new Set();
+  function sendIntroduce(id) { if (!wsSend({ type: 'introduce', to: id, card: me.card })) pendingIntro.add(id); }
+  function flushIntroduce() { for (const id of [...pendingIntro]) if (wsSend({ type: 'introduce', to: id, card: me.card })) pendingIntro.delete(id); }
   // Someone scanned my QR -> they introduce themselves -> I auto-add them.
   async function onIntroduce(m) {
     const card = m.card;
@@ -585,6 +608,23 @@
     $('#showQrBtn').onclick = showMyQr;
     $('#scanBtn').onclick = startScan;
     $('#confirmAdd').onclick = confirmAdd;
+    // share / copy my invite link (best for remote friending)
+    $('#shareLink').onclick = async () => {
+      const url = identityLink(me.card);
+      if (navigator.share) { try { await navigator.share({ title: 'Πρόσθεσέ με στο Private Messenger', url }); return; } catch { } }
+      try { await navigator.clipboard.writeText(url); toast('Link αντιγράφηκε — επικόλλησέ το σε μήνυμα.'); } catch { toast('Αντέγραψε το link χειροκίνητα.'); }
+    };
+    $('#copyLink').onclick = async () => {
+      try { await navigator.clipboard.writeText(identityLink(me.card)); toast('Το link αντιγράφηκε.'); } catch { toast('Δεν μπόρεσα να αντιγράψω.'); }
+    };
+    // scan a QR from a saved photo (when someone sent you their QR image)
+    $('#qrFromPhoto').onclick = () => $('#qrPhoto').click();
+    $('#qrPhoto').addEventListener('change', async (e) => {
+      const f = e.target.files[0]; e.target.value = '';
+      if (!f) return;
+      const data = await decodeQrFromFile(f);
+      if (data) handleScanned(data); else toast('Δεν βρέθηκε QR σε αυτή τη φωτό.');
+    });
     $('#backBtn').onclick = () => { $('#app').classList.remove('show-chat'); currentPeer = null; renderContacts(); };
     document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => { stopScan(); b.closest('.modal').classList.add('hidden'); });
 

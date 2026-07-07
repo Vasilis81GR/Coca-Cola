@@ -96,10 +96,12 @@
   <!-- My QR modal -->
   <div id="qrModal" class="modal hidden">
     <div class="modal-card">
-      <h2>Το QR μου</h2>
-      <p class="muted tiny">Δώσε το να το σκανάρει ο άλλος για να σε προσθέσει.</p>
+      <h2>Πρόσθεσέ με</h2>
+      <p class="muted tiny">Από κοντά: δείξε το QR να το σκανάρει ο άλλος. Από μακριά: στείλε το link — μόλις το πατήσει, γίνεστε φίλοι.</p>
       <img id="qrImg" alt="QR" />
       <div id="myIdShort" class="tiny muted mono"></div>
+      <button id="shareLink" class="primary">📩 Στείλε link πρόσκλησης</button>
+      <button id="copyLink" class="ghost">Αντιγραφή link</button>
       <button class="ghost close-modal">Κλείσιμο</button>
     </div>
   </div>
@@ -177,6 +179,8 @@
         <div class="scan-frame"></div>
       </div>
       <div id="scanStatus" class="tiny muted"></div>
+      <input id="qrPhoto" type="file" accept="image/*" hidden />
+      <button id="qrFromPhoto" class="ghost">🖼️ Σκανάρισμα από φωτό</button>
       <button class="ghost close-modal">Άκυρο</button>
     </div>
   </div>
