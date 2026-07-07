@@ -19,6 +19,17 @@
   let vapidKey = null, pushEnabled = false;
   let sessionPass = null, ownerToken = null, cloudEnabled = false;   // owner cloud backup
 
+  // Android install prompt: capture the event so we can offer a one-tap install button.
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault(); deferredPrompt = e;
+    document.querySelectorAll('.install-app').forEach(b => b.classList.remove('hidden'));
+  });
+  window.addEventListener('appinstalled', () => {
+    deferredPrompt = null;
+    document.querySelectorAll('.install-app').forEach(b => b.classList.add('hidden'));
+  });
+
   // --- utilities ------------------------------------------------------------
   const encodeCard = (card) => C.b64url(enc.encode(JSON.stringify(card)));
   const decodeCard = (p) => JSON.parse(dec.decode(C.b64urlToBuf(p)));
@@ -562,6 +573,12 @@
 
   // --- events ---------------------------------------------------------------
   function wireEvents() {
+    // one-tap install (Android). On iOS this button stays hidden (no event); use Share → Add to Home Screen.
+    document.querySelectorAll('.install-app').forEach(b => b.onclick = async () => {
+      if (!deferredPrompt) { toast('Μενού ⋮ του Chrome → «Install app».'); return; }
+      deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt = null;
+      document.querySelectorAll('.install-app').forEach(x => x.classList.add('hidden'));
+    });
     $('#createIdentity').onclick = async () => {
       const name = $('#nameInput').value.trim() || 'Anonymous';
       const pass = $('#passInput').value;
