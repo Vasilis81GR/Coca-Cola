@@ -290,10 +290,12 @@ wss.on('connection', (ws) => {
       return;
     }
 
-    // --- Read receipt.
+    // --- Read receipt. Queue it if the sender is offline, so THEIR copy also
+    //     expires (otherwise the sender never learns the message was read).
     if (msg.type === 'read') {
+      const env = { type: 'read', from: ws.id, mids: msg.mids || [], expireAt: msg.expireAt || null };
       const dest = clients.get(msg.to);
-      if (dest) send(dest, { type: 'read', from: ws.id, mids: msg.mids || [] });
+      if (dest) send(dest, env); else enqueue(msg.to, env);
       return;
     }
 
