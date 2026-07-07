@@ -39,9 +39,14 @@ const MAX_MSG_BYTES = 12 * 1024 * 1024; // allow encrypted photos (~ up to a few
 // is never committed. If absent, push is simply disabled.
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE || '';
-const PUSH_ENABLED = !!(VAPID_PUBLIC && VAPID_PRIVATE);
+let PUSH_ENABLED = !!(VAPID_PUBLIC && VAPID_PRIVATE);
 if (PUSH_ENABLED) {
-  webpush.setVapidDetails('mailto:admin@private-messenger.local', VAPID_PUBLIC, VAPID_PRIVATE);
+  try {
+    webpush.setVapidDetails('mailto:admin@private-messenger.local', VAPID_PUBLIC, VAPID_PRIVATE);
+  } catch (e) {
+    console.warn('Invalid VAPID keys — push disabled:', e.message);
+    PUSH_ENABLED = false;   // bad keys must not crash the server
+  }
 }
 
 // ---------------------------------------------------------------------------
