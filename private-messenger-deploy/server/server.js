@@ -230,6 +230,15 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    // --- Mutual add: when A scans B's QR, A sends its own card so B auto-adds A.
+    if (msg.type === 'introduce') {
+      if (typeof msg.to !== 'string' || !msg.card || typeof msg.card !== 'object') return;
+      const env = { type: 'introduce', from: ws.id, card: msg.card };
+      const dest = clients.get(msg.to);
+      if (dest) send(dest, env); else { enqueue(msg.to, env); sendPush(msg.to); }
+      return;
+    }
+
     // --- Typing indicator (also opaque metadata, only relayed if peer online).
     if (msg.type === 'typing') {
       const dest = clients.get(msg.to);
