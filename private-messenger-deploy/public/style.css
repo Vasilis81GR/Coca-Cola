@@ -26,12 +26,15 @@ input:focus{border-color:var(--accent)}
 
 .screen{position:fixed;inset:0}
 
-/* Onboarding */
-#onboarding{display:flex;align-items:center;justify-content:center;padding:24px}
-#onboarding .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:28px;max-width:380px;width:100%;text-align:center}
+/* Onboarding + Lock */
+#onboarding,#lock{display:flex;align-items:center;justify-content:center;padding:24px;overflow-y:auto}
+#onboarding .card,#lock .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px;max-width:380px;width:100%;text-align:center}
 #onboarding h1{margin:8px 0 6px;font-size:22px}
-#onboarding label{display:block;text-align:left;margin:18px 0 6px;font-size:13px;color:var(--muted)}
-#onboarding .primary{width:100%;margin-top:16px}
+#onboarding label,#lock label{display:block;text-align:left;margin:16px 0 6px;font-size:13px;color:var(--muted)}
+#onboarding .primary,#lock .primary{width:100%;margin-top:16px}
+#lock .name{margin:6px 0;font-size:16px}
+.install-qr{width:150px;height:150px;background:#fff;padding:8px;border-radius:12px;display:block;margin:0 auto 6px}
+.err{color:var(--danger);margin-top:10px}
 .logo{font-size:40px}.logo.big{font-size:56px;opacity:.5}
 .logo-img{width:76px;height:76px;border-radius:20px;display:block;margin:0 auto}
 .logo-img.big{width:100px;height:100px;opacity:.92;border-radius:26px}

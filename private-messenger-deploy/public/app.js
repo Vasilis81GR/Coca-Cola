@@ -47,16 +47,31 @@
   function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   // --- identity -------------------------------------------------------------
-  async function loadOrCreateIdentity() {
-    const saved = await DB.kvGet('identity');
-    if (saved) { me = saved; return true; }
-    return false;
+  // Returns the boot state: 'ready' (loaded), 'locked' (needs password), 'new'.
+  async function bootState() {
+    const encId = await DB.kvGet('identity-enc');
+    const pub = await DB.kvGet('identity-pub');
+    if (encId && pub) return { state: 'locked', pub };
+    const legacy = await DB.kvGet('identity');      // pre-password installs
+    if (legacy) { me = legacy; return { state: 'ready' }; }
+    return { state: 'new' };
   }
-  async function createIdentity(name) {
+  async function createIdentity(name, password) {
     const bundle = await C.generateIdentity();
     const card = await C.identityCard(bundle, name);
     me = { id: card.id, name, card, signPriv: bundle.signPriv, dhPriv: bundle.dhPriv };
-    await DB.kvSet('identity', me);
+    await DB.kvSet('identity-pub', { id: card.id, name, card });
+    await DB.kvSet('identity-enc', await C.wrapIdentity(bundle, password));
+  }
+  async function unlock(password) {
+    const encId = await DB.kvGet('identity-enc');
+    const pub = await DB.kvGet('identity-pub');
+    const privs = await C.unwrapIdentity(encId, password);   // throws on wrong password
+    me = { id: pub.id, name: pub.name, card: pub.card, signPriv: privs.signPriv, dhPriv: privs.dhPriv };
+  }
+  function setInstallQr() {
+    const src = '/qr?data=' + encodeURIComponent(location.origin);
+    ['#installQr', '#installQrLock', '#inviteQr'].forEach(sel => { const el = $(sel); if (el) el.src = src; });
   }
   async function keyFor(peer) {
     if (keyCache.has(peer.id)) return keyCache.get(peer.id);
@@ -414,9 +429,25 @@
   function wireEvents() {
     $('#createIdentity').onclick = async () => {
       const name = $('#nameInput').value.trim() || 'Anonymous';
-      $('#createIdentity').disabled = true; await createIdentity(name); await startApp();
+      const pass = $('#passInput').value;
+      if (pass.length < 4) { toast('Βάλε κωδικό τουλάχιστον 4 χαρακτήρων.'); return; }
+      $('#createIdentity').disabled = true;
+      await createIdentity(name, pass);
+      await startApp();
     };
-    $('#nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#createIdentity').click(); });
+    $('#nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#passInput').focus(); });
+    $('#passInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#createIdentity').click(); });
+    // unlock (returning user)
+    const doUnlock = async () => {
+      const pass = $('#lockPass').value; if (!pass) return;
+      $('#lockErr').classList.add('hidden');
+      try { await unlock(pass); $('#lock').classList.add('hidden'); await startApp(); }
+      catch { $('#lockErr').classList.remove('hidden'); $('#lockPass').value = ''; }
+    };
+    $('#unlockBtn').onclick = doUnlock;
+    $('#lockPass').addEventListener('keydown', e => { if (e.key === 'Enter') doUnlock(); });
+    // invite / download QR
+    $('#inviteBtn').onclick = () => { setInstallQr(); $('#inviteModal').classList.remove('hidden'); };
     $('#showQrBtn').onclick = showMyQr;
     $('#scanBtn').onclick = startScan;
     $('#confirmAdd').onclick = confirmAdd;
@@ -481,9 +512,12 @@
   }
   async function main() {
     wireEvents();
+    setInstallQr();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-    const has = await loadOrCreateIdentity();
-    if (has) await startApp(); else $('#onboarding').classList.remove('hidden');
+    const b = await bootState();
+    if (b.state === 'ready') { await startApp(); }
+    else if (b.state === 'locked') { $('#lockHello').textContent = 'Καλωσόρισες ' + (b.pub.name || ''); $('#lock').classList.remove('hidden'); }
+    else { $('#onboarding').classList.remove('hidden'); }
   }
   main();
 })();

@@ -82,6 +82,31 @@ const C = (() => {
     );
   }
 
+  // --- password lock: encrypt the identity's private keys at rest ----------
+  async function passKey(password, salt) {
+    const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt, iterations: 200000, hash: 'SHA-256' },
+      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+    );
+  }
+  // Encrypt the two private keys with a key derived from the password.
+  async function wrapIdentity(idBundle, password) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await passKey(password, salt);
+    const payload = JSON.stringify({ signPriv: b64url(idBundle.signPriv), dhPriv: b64url(idBundle.dhPriv) });
+    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(payload));
+    return { salt: b64url(salt), iv: b64url(iv), data: b64url(data) };
+  }
+  // Decrypt them back given the correct password (throws if wrong).
+  async function unwrapIdentity(box, password) {
+    const key = await passKey(password, new Uint8Array(b64urlToBuf(box.salt)));
+    const data = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(b64urlToBuf(box.iv)) }, key, b64urlToBuf(box.data));
+    const obj = JSON.parse(dec.decode(data));
+    return { signPriv: b64urlToBuf(obj.signPriv), dhPriv: b64urlToBuf(obj.dhPriv) };
+  }
+
   async function encrypt(aesKey, plaintext) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, enc.encode(plaintext));
@@ -94,5 +119,5 @@ const C = (() => {
     return dec.decode(data);
   }
 
-  return { generateIdentity, fingerprint, identityCard, signNonce, deriveKey, encrypt, decrypt, b64url, b64urlToBuf };
+  return { generateIdentity, fingerprint, identityCard, signNonce, deriveKey, encrypt, decrypt, wrapIdentity, unwrapIdentity, b64url, b64urlToBuf };
 })();
