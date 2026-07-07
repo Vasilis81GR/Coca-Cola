@@ -644,6 +644,14 @@
       const data = await decodeQrFromFile(f);
       if (data) handleScanned(data); else toast('Δεν βρέθηκε QR σε αυτή τη φωτό.');
     });
+    // add a contact by pasting their invite link (reliable inside the installed app)
+    $('#addByLink').onclick = () => {
+      const v = $('#pasteLink').value.trim(); if (!v) return;
+      const card = parseIdentity(v);
+      if (!card) return toast('Μη έγκυρο link. Αντέγραψε ολόκληρο το link (με το #add=).');
+      $('#pasteLink').value = ''; stopScan(); $('#scanModal').classList.add('hidden');
+      promptAdd(card);
+    };
     $('#backBtn').onclick = () => { $('#app').classList.remove('show-chat'); currentPeer = null; renderContacts(); };
     document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => { stopScan(); b.closest('.modal').classList.add('hidden'); });
 
