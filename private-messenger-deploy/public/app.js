@@ -630,8 +630,15 @@
     $('#backBtn').onclick = () => { $('#app').classList.remove('show-chat'); currentPeer = null; renderContacts(); };
     document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => { stopScan(); b.closest('.modal').classList.add('hidden'); });
 
-    $('#sendBtn').onclick = () => { const i = $('#msgInput'); const v = i.value; i.value = ''; i.focus(); if (v.trim()) sendText(v); };
-    $('#msgInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#sendBtn').click(); });
+    $('#sendBtn').onclick = () => {
+      const i = $('#msgInput'); const v = i.value; i.value = '';
+      i.blur();                          // drop the keyboard so the whole chat is visible
+      if (v.trim()) sendText(v);
+      setTimeout(scrollDown, 250);
+    };
+    $('#msgInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#sendBtn').click(); } });
+    // tap on the messages area dismisses the keyboard (classic behavior)
+    $('#messages').addEventListener('click', () => { if (document.activeElement === $('#msgInput')) $('#msgInput').blur(); });
     let typingSent = 0;
     $('#msgInput').addEventListener('input', () => {
       if (!currentPeer) return; const now = Date.now();
