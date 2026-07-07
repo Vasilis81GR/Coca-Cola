@@ -37,6 +37,7 @@ const MAX_MSG_BYTES = 12 * 1024 * 1024; // allow encrypted photos (~ up to a few
 
 // Web Push (content-less notifications). Keys come from env so the private key
 // is never committed. If absent, push is simply disabled.
+const OWNER_TOKEN = process.env.OWNER_TOKEN || '';   // master-only cloud backup gate
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC || '';
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE || '';
 let PUSH_ENABLED = !!(VAPID_PUBLIC && VAPID_PRIVATE);
@@ -99,11 +100,22 @@ async function sendPush(id) {
   }
 }
 
+// --- Owner-only cloud backup (a single encrypted blob, gated by OWNER_TOKEN) -
+const BACKUP_FILE = path.join(DATA_DIR, 'backups.json');
+let backups = {};   // { slot: encryptedBlobString }  (slot = hash of the owner token)
+try { backups = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf8')); } catch (_) { backups = {}; }
+function persistBackups() { fs.writeFile(BACKUP_FILE, JSON.stringify(backups), () => {}); }
+function tokenOk(t) {
+  if (!OWNER_TOKEN || typeof t !== 'string' || t.length !== OWNER_TOKEN.length) return false;
+  try { return crypto.timingSafeEqual(Buffer.from(t), Buffer.from(OWNER_TOKEN)); } catch { return false; }
+}
+function slotFor(t) { return crypto.createHash('sha256').update(t).digest('hex'); }
+
 // ---------------------------------------------------------------------------
 // HTTP + static + QR helper
 // ---------------------------------------------------------------------------
 const app = express();
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '4mb' }));
 
 // Render any string payload as a QR PNG. The client uses this to show its
 // identity QR (the identity JSON is passed as ?data=...).
@@ -122,6 +134,27 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, online: clients.size }))
 
 // Public VAPID key + whether push is configured on this server.
 app.get('/vapid', (_req, res) => res.json({ enabled: PUSH_ENABLED, key: VAPID_PUBLIC }));
+
+// Whether owner cloud-backup is configured on this server (no secret revealed).
+app.get('/cloud-status', (_req, res) => res.json({ enabled: !!OWNER_TOKEN }));
+
+// Store the owner's encrypted backup blob. Requires the owner token.
+app.post('/cloud-backup', (req, res) => {
+  const { token, blob } = req.body || {};
+  if (!tokenOk(token)) return res.status(403).json({ error: 'forbidden' });
+  if (typeof blob !== 'string' || blob.length > 3_500_000) return res.status(400).json({ error: 'bad blob' });
+  backups[slotFor(token)] = blob; persistBackups();
+  res.json({ ok: true });
+});
+
+// Fetch the owner's encrypted backup blob back. Requires the owner token.
+app.post('/cloud-restore', (req, res) => {
+  const { token } = req.body || {};
+  if (!tokenOk(token)) return res.status(403).json({ error: 'forbidden' });
+  const blob = backups[slotFor(token)];
+  if (!blob) return res.status(404).json({ error: 'no backup' });
+  res.json({ blob });
+});
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
