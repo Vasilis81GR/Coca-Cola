@@ -22,6 +22,7 @@
       <label>Ο κωδικός σου</label>
       <input id="passInput" type="password" placeholder="" autocomplete="new-password" />
       <button id="createIdentity" class="primary">Δημιουργία ταυτότητας</button>
+      <button class="ghost restore-btn">Επαναφορά από backup</button>
       <p class="tiny muted">Τα κλειδιά σου δημιουργούνται & κρυπτογραφούνται με τον κωδικό σου σε αυτή τη συσκευή. Αν ξεχάσεις τον κωδικό, χάνεται η ταυτότητα.</p>
     </div>
   </section>
@@ -37,14 +38,16 @@
       <input id="lockPass" type="password" placeholder="" autocomplete="current-password" />
       <button id="unlockBtn" class="primary">Είσοδος</button>
       <div id="lockErr" class="tiny err hidden">Λάθος κωδικός.</div>
+      <button class="ghost restore-btn">Επαναφορά από backup</button>
     </div>
   </section>
+  <input id="restoreFile" type="file" accept="application/json,.json,.pmid" hidden />
 
   <!-- Main app -->
   <section id="app" class="screen hidden">
     <aside id="sidebar">
       <header class="bar">
-        <div class="me">
+        <div class="me" id="meBtn">
           <div class="avatar" id="myAvatar"></div>
           <div>
             <div id="myName" class="name"></div>
@@ -96,6 +99,31 @@
       <img id="qrImg" alt="QR" />
       <div id="myIdShort" class="tiny muted mono"></div>
       <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Ρυθμίσεις</h2>
+      <div id="settingsId" class="tiny muted mono"></div>
+      <button id="enableNotif" class="ghost">🔔 Ενεργοποίηση ειδοποιήσεων</button>
+      <button id="setPassBtn" class="ghost">🔑 Όρισε / άλλαξε κωδικό</button>
+      <button id="backupBtn" class="ghost">💾 Backup ταυτότητας (αρχείο)</button>
+      <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <!-- Set password modal -->
+  <div id="setPassModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Όρισε κωδικό</h2>
+      <p class="muted tiny">Κλειδώνει την ταυτότητά σου. Κράτα και ένα backup — αν χαθεί η συσκευή, με το backup + τον κωδικό ξαναμπαίνεις.</p>
+      <input id="newPass" type="password" placeholder="Νέος κωδικός (min 4)" autocomplete="new-password" />
+      <div class="row">
+        <button class="ghost close-modal">Άκυρο</button>
+        <button id="savePass" class="primary">Αποθήκευση</button>
+      </div>
     </div>
   </div>
 

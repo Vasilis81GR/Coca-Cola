@@ -39,6 +39,7 @@ const DB = (() => {
   // kv
   const kvGet = (k) => tx('kv', 'readonly', s => s.get(k));
   const kvSet = (k, v) => tx('kv', 'readwrite', s => s.put(v, k));
+  const kvDelete = (k) => tx('kv', 'readwrite', s => s.delete(k));
 
   // contacts
   const putContact = (c) => tx('contacts', 'readwrite', s => s.put(c));
@@ -75,7 +76,7 @@ const DB = (() => {
   }));
 
   return {
-    kvGet, kvSet,
+    kvGet, kvSet, kvDelete,
     putContact, getContact, delContact, allContacts,
     putMessage, getMessage, delMessage, allMessages, messagesFor, deleteConversation,
   };

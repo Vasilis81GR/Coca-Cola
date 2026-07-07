@@ -97,6 +97,7 @@
         registerPush();
         if (currentPeer) probePresence(currentPeer);
       } else if (m.type === 'msg') { await onIncoming(m); }
+      else if (m.type === 'introduce') { await onIntroduce(m); }
       else if (m.type === 'ack') { await onAck(m); }
       else if (m.type === 'typing') { if (m.from === currentPeer) showTyping(m.on); }
       else if (m.type === 'read') { await onReadReceipt(m); }
@@ -248,9 +249,9 @@
         pushEnabled = !!(r && r.enabled); vapidKey = r && r.key ? r.key : '';
       }
       if (!pushEnabled || !vapidKey) return;
-      if (Notification.permission !== 'granted') {
-        const p = await Notification.requestPermission(); if (p !== 'granted') return;
-      }
+      // Do NOT auto-request permission here — iOS blocks it outside a user gesture.
+      // The "Enable notifications" button asks for permission on tap.
+      if (!('Notification' in window) || Notification.permission !== 'granted') return;
       const reg = await navigator.serviceWorker.ready;
       let sub = await reg.pushManager.getSubscription();
       if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(vapidKey) });
@@ -421,8 +422,55 @@
     const ex = contacts.get(pendingAdd.id) || {};
     const c = { id: pendingAdd.id, name: pendingAdd.n || 'Χωρίς όνομα', spk: pendingAdd.spk, epk: pendingAdd.epk, addedAt: ex.addedAt || Date.now(), last: ex.last, lastTs: ex.lastTs, unread: ex.unread };
     keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
+    // Mutual add: tell the other side to add me too (so only one scan is needed).
+    wsSend({ type: 'introduce', to: c.id, card: me.card });
     $('#addModal').classList.add('hidden'); pendingAdd = null; renderContacts();
     toast('Η επαφή προστέθηκε.'); openConversation(c.id);
+  }
+  // Someone scanned my QR -> they introduce themselves -> I auto-add them.
+  async function onIntroduce(m) {
+    const card = m.card;
+    if (!card || !card.id || card.id === me.id || contacts.has(card.id)) return;
+    const c = { id: card.id, name: card.n || 'Χωρίς όνομα', spk: card.spk, epk: card.epk, addedAt: Date.now() };
+    keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
+    renderContacts();
+    toast(`${c.name} σε πρόσθεσε ✓`);
+  }
+  // --- settings / password / backup ----------------------------------------
+  async function setPassword(pw) {
+    await DB.kvSet('identity-pub', { id: me.id, name: me.name, card: me.card });
+    await DB.kvSet('identity-enc', await C.wrapIdentity({ signPriv: me.signPriv, dhPriv: me.dhPriv }, pw));
+    await DB.kvDelete('identity');   // drop any legacy plaintext copy
+  }
+  async function exportBackup() {
+    const encId = await DB.kvGet('identity-enc');
+    const pub = await DB.kvGet('identity-pub');
+    if (!encId || !pub) { toast('Όρισε πρώτα κωδικό, μετά κάνε backup.'); return; }
+    const backup = { v: 1, app: 'private-messenger', pub, enc: encId, contacts: await DB.allContacts() };
+    const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `private-messenger-backup-${(me.name || 'me').replace(/\s+/g, '_')}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast('Backup κατέβηκε — φύλαξέ το ασφαλή.');
+  }
+  async function importBackup(file) {
+    try {
+      const b = JSON.parse(await file.text());
+      if (!b.pub || !b.enc) { toast('Μη έγκυρο backup.'); return; }
+      await DB.kvSet('identity-pub', b.pub);
+      await DB.kvSet('identity-enc', b.enc);
+      await DB.kvDelete('identity');
+      if (Array.isArray(b.contacts)) for (const c of b.contacts) await DB.putContact(c);
+      toast('Επαναφορά έγινε. Βάλε τον κωδικό σου.');
+      setTimeout(() => location.reload(), 900);
+    } catch { toast('Δεν μπόρεσα να διαβάσω το backup.'); }
+  }
+  function updateNotifBtn() {
+    const b = $('#enableNotif'); if (!b) return;
+    const g = ('Notification' in window) && Notification.permission === 'granted';
+    b.textContent = g ? '🔔 Ειδοποιήσεις: ενεργές' : '🔔 Ενεργοποίηση ειδοποιήσεων';
   }
 
   // --- events ---------------------------------------------------------------
@@ -448,6 +496,25 @@
     $('#lockPass').addEventListener('keydown', e => { if (e.key === 'Enter') doUnlock(); });
     // invite / download QR
     $('#inviteBtn').onclick = () => { setInstallQr(); $('#inviteModal').classList.remove('hidden'); };
+    // settings
+    $('#meBtn').onclick = () => { $('#settingsId').textContent = 'ID: ' + me.id; updateNotifBtn(); $('#settingsModal').classList.remove('hidden'); };
+    $('#enableNotif').onclick = async () => {
+      if (!('Notification' in window)) return toast('Ο browser δεν υποστηρίζει ειδοποιήσεις.');
+      const p = await Notification.requestPermission();
+      if (p === 'granted') { await registerPush(); toast('Ειδοποιήσεις ενεργοποιήθηκαν.'); }
+      else toast('Δεν δόθηκε άδεια για ειδοποιήσεις.');
+      updateNotifBtn();
+    };
+    $('#setPassBtn').onclick = () => { $('#newPass').value = ''; $('#settingsModal').classList.add('hidden'); $('#setPassModal').classList.remove('hidden'); };
+    $('#savePass').onclick = async () => {
+      const pw = $('#newPass').value;
+      if (pw.length < 4) return toast('Κωδικός τουλάχιστον 4 χαρακτήρων.');
+      await setPassword(pw); $('#setPassModal').classList.add('hidden');
+      toast('Ο κωδικός ορίστηκε. Θα τον ζητάει στο άνοιγμα.');
+    };
+    $('#backupBtn').onclick = exportBackup;
+    document.querySelectorAll('.restore-btn').forEach(b => b.onclick = () => $('#restoreFile').click());
+    $('#restoreFile').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importBackup(f); });
     $('#showQrBtn').onclick = showMyQr;
     $('#scanBtn').onclick = startScan;
     $('#confirmAdd').onclick = confirmAdd;
