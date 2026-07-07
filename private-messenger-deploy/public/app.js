@@ -251,7 +251,7 @@
     updateBadge(n);
     toast(n === 1 ? '1 νέο μήνυμα' : `${n} νέα μηνύματα`);
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-      try { new Notification('🔒 Private Messenger', { body: n === 1 ? '1 νέο μήνυμα' : `${n} νέα μηνύματα`, icon: '/icons/icon-192.png', tag: 'pm-count', renotify: true }); } catch {}
+      try { new Notification('🟡 Bigman', { body: n === 1 ? '1 νέο μήνυμα' : `${n} νέα μηνύματα`, icon: '/icons/icon-192.png', tag: 'pm-count', renotify: true }); } catch {}
     }
   }
   function updateBadge(n) {
@@ -633,7 +633,7 @@
     // share / copy my invite link (best for remote friending)
     $('#shareLink').onclick = async () => {
       const url = identityLink(me.card);
-      if (navigator.share) { try { await navigator.share({ title: 'Πρόσθεσέ με στο Private Messenger', url }); return; } catch { } }
+      if (navigator.share) { try { await navigator.share({ title: 'Πρόσθεσέ με στο Bigman', url }); return; } catch { } }
       try { await navigator.clipboard.writeText(url); toast('Link αντιγράφηκε — επικόλλησέ το σε μήνυμα.'); } catch { toast('Αντέγραψε το link χειροκίνητα.'); }
     };
     $('#copyLink').onclick = async () => {

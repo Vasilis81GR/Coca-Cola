@@ -1,7 +1,7 @@
 :root{
   --bg:#0f1420; --panel:#161c2b; --panel2:#1e2638; --line:#28324a;
-  --text:#e8ecf5; --muted:#8b96ad; --accent:#ff5a63; --accent2:#e01a22;
-  --in:#222c42; --out:#c8121b; --danger:#ff5a5f; --ok:#37d67a;
+  --text:#e8ecf5; --muted:#8b96ad; --accent:#ffd23f; --accent2:#e0a70e;
+  --in:#222c42; --out:#8a6a12; --danger:#ff5a5f; --ok:#37d67a;
   --radius:16px; --safe-b:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}

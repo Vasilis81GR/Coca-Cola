@@ -1,29 +1,25 @@
-<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Private Messenger logo">
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Bigman logo">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#F5333D"/>
-      <stop offset="1" stop-color="#A50F17"/>
+      <stop offset="0" stop-color="#1b2540"/>
+      <stop offset="1" stop-color="#0a1020"/>
     </linearGradient>
-    <linearGradient id="lock" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#E01A22"/>
-      <stop offset="1" stop-color="#B3121B"/>
-    </linearGradient>
+    <radialGradient id="chomp" cx="42%" cy="38%" r="70%">
+      <stop offset="0" stop-color="#FFE55C"/>
+      <stop offset="1" stop-color="#F5B700"/>
+    </radialGradient>
   </defs>
 
-  <!-- rounded red tile -->
+  <!-- rounded arcade tile -->
   <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
 
-  <!-- white speech bubble with a tail -->
-  <path fill="#ffffff" d="M136 108h240a44 44 0 0 1 44 44v150a44 44 0 0 1-44 44H236l-70 60a10 10 0 0 1-16-8v-52h-14a44 44 0 0 1-44-44V152a44 44 0 0 1 44-44z"/>
+  <!-- yellow chomper: a full circle with a wedge cut out for the mouth (opens right) -->
+  <circle cx="238" cy="256" r="168" fill="url(#chomp)"/>
+  <path d="M238 256 L 452 150 L 452 362 Z" fill="url(#bg)"/>
 
-  <!-- padlock inside the bubble -->
-  <g transform="translate(256 232)">
-    <!-- shackle -->
-    <path d="M-42-18v-14a42 42 0 0 1 84 0v14" fill="none" stroke="url(#lock)" stroke-width="26" stroke-linecap="round"/>
-    <!-- body -->
-    <rect x="-58" y="-18" width="116" height="96" rx="20" fill="url(#lock)"/>
-    <!-- keyhole -->
-    <circle cx="0" cy="18" r="15" fill="#ffffff"/>
-    <path d="M-9 22h18l-6 34h-6z" fill="#ffffff"/>
-  </g>
+  <!-- eye -->
+  <circle cx="214" cy="168" r="24" fill="#0a1020"/>
+
+  <!-- a little pellet it is munching -->
+  <circle cx="470" cy="256" r="20" fill="#FFE55C"/>
 </svg>

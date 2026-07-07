@@ -3,7 +3,7 @@
  * offline (you can read old messages; sending needs a connection).
  * Bump CACHE when you change any static file.
  */
-const CACHE = 'pm-v14';
+const CACHE = 'pm-v15';
 const SHELL = [
   '/', '/index.html', '/style.css', '/crypto.js', '/db.js', '/app.js',
   '/vendor/jsQR.js', '/manifest.json', '/logo.svg',
@@ -26,7 +26,7 @@ self.addEventListener('push', (e) => {
   let count = '';
   try { const d = e.data ? e.data.json() : {}; count = d && d.n ? d.n : ''; } catch (_) {}
   const body = count ? `${count} νέα μηνύματα` : 'Έχεις νέο μήνυμα';
-  e.waitUntil(self.registration.showNotification('🔒 Private Messenger', {
+  e.waitUntil(self.registration.showNotification('🟡 Bigman', {
     body, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png', tag: 'pm-push', renotify: true
   }));
 });

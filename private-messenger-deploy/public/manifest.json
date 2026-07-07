@@ -1,6 +1,6 @@
 {
-  "name": "Private Messenger",
-  "short_name": "Private",
+  "name": "Bigman",
+  "short_name": "Bigman",
   "description": "Ιδιωτική, end-to-end κρυπτογραφημένη συνομιλία με προσθήκη επαφών μέσω QR.",
   "start_url": "/",
   "scope": "/",
