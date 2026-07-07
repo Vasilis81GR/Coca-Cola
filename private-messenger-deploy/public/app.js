@@ -17,6 +17,7 @@
   let scanStream = null, scanRAF = null;
   let pendingAdd = null;         // card awaiting confirmation
   let vapidKey = null, pushEnabled = false;
+  let sessionPass = null, ownerToken = null, cloudEnabled = false;   // owner cloud backup
 
   // --- utilities ------------------------------------------------------------
   const encodeCard = (card) => C.b64url(enc.encode(JSON.stringify(card)));
@@ -60,6 +61,7 @@
     const bundle = await C.generateIdentity();
     const card = await C.identityCard(bundle, name);
     me = { id: card.id, name, card, signPriv: bundle.signPriv, dhPriv: bundle.dhPriv };
+    sessionPass = password;
     await DB.kvSet('identity-pub', { id: card.id, name, card });
     await DB.kvSet('identity-enc', await C.wrapIdentity(bundle, password));
   }
@@ -68,6 +70,7 @@
     const pub = await DB.kvGet('identity-pub');
     const privs = await C.unwrapIdentity(encId, password);   // throws on wrong password
     me = { id: pub.id, name: pub.name, card: pub.card, signPriv: privs.signPriv, dhPriv: privs.dhPriv };
+    sessionPass = password;
   }
   function setInstallQr() {
     const src = '/qr?data=' + encodeURIComponent(location.origin);
@@ -424,6 +427,7 @@
     keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
     // Mutual add: tell the other side to add me too (so only one scan is needed).
     wsSend({ type: 'introduce', to: c.id, card: me.card });
+    scheduleCloudBackup();
     $('#addModal').classList.add('hidden'); pendingAdd = null; renderContacts();
     toast('Η επαφή προστέθηκε.'); openConversation(c.id);
   }
@@ -433,14 +437,72 @@
     if (!card || !card.id || card.id === me.id || contacts.has(card.id)) return;
     const c = { id: card.id, name: card.n || 'Χωρίς όνομα', spk: card.spk, epk: card.epk, addedAt: Date.now() };
     keyCache.delete(c.id); await DB.putContact(c); contacts.set(c.id, c);
-    renderContacts();
+    renderContacts(); scheduleCloudBackup();
     toast(`${c.name} σε πρόσθεσε ✓`);
   }
   // --- settings / password / backup ----------------------------------------
   async function setPassword(pw) {
+    sessionPass = pw;
     await DB.kvSet('identity-pub', { id: me.id, name: me.name, card: me.card });
     await DB.kvSet('identity-enc', await C.wrapIdentity({ signPriv: me.signPriv, dhPriv: me.dhPriv }, pw));
     await DB.kvDelete('identity');   // drop any legacy plaintext copy
+    scheduleCloudBackup();
+  }
+
+  // --- owner-only cloud backup ---------------------------------------------
+  let cloudTimer;
+  function scheduleCloudBackup() {
+    if (!ownerToken || !sessionPass) return;
+    clearTimeout(cloudTimer); cloudTimer = setTimeout(cloudBackupNow, 1500);
+  }
+  async function cloudBackupNow() {
+    if (!ownerToken || !sessionPass) return;
+    try {
+      let encId = await DB.kvGet('identity-enc');
+      let pub = await DB.kvGet('identity-pub');
+      if (!encId || !pub) {   // ensure identity is password-wrapped first
+        pub = { id: me.id, name: me.name, card: me.card };
+        encId = await C.wrapIdentity({ signPriv: me.signPriv, dhPriv: me.dhPriv }, sessionPass);
+        await DB.kvSet('identity-pub', pub); await DB.kvSet('identity-enc', encId);
+      }
+      const payload = JSON.stringify({ pub, enc: encId, contacts: await DB.allContacts() });
+      const blob = await C.sealWithPassword(sessionPass, payload);
+      const r = await fetch('/cloud-backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: ownerToken, blob }) });
+      if (!r.ok && r.status === 403) { toast('Cloud backup: λάθος master token.'); }
+    } catch (e) { /* offline etc. */ }
+  }
+  async function enableCloud(token) {
+    // verify token by doing one backup attempt
+    ownerToken = token;
+    if (!sessionPass) { toast('Όρισε πρώτα κωδικό (Ρυθμίσεις → Όρισε κωδικό).'); ownerToken = null; return; }
+    const encId = await DB.kvGet('identity-enc') || await C.wrapIdentity({ signPriv: me.signPriv, dhPriv: me.dhPriv }, sessionPass);
+    const pub = await DB.kvGet('identity-pub') || { id: me.id, name: me.name, card: me.card };
+    await DB.kvSet('identity-pub', pub); await DB.kvSet('identity-enc', encId);
+    const payload = JSON.stringify({ pub, enc: encId, contacts: await DB.allContacts() });
+    const blob = await C.sealWithPassword(sessionPass, payload);
+    const r = await fetch('/cloud-backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, blob }) });
+    if (r.ok) { await DB.kvSet('owner-token', token); toast('Cloud backup ενεργό ✓'); return true; }
+    ownerToken = null;
+    toast(r.status === 403 ? 'Λάθος master token.' : 'Απέτυχε (server;).');
+    return false;
+  }
+  async function cloudRestore(token, password) {
+    let r;
+    try { r = await fetch('/cloud-restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) }); }
+    catch { toast('Χωρίς σύνδεση στον server.'); return; }
+    if (r.status === 403) return toast('Λάθος master token.');
+    if (r.status === 404) return toast('Δεν υπάρχει cloud backup.');
+    if (!r.ok) return toast('Απέτυχε η επαναφορά.');
+    const { blob } = await r.json();
+    let payload; try { payload = await C.openWithPassword(password, blob); } catch { return toast('Λάθος κωδικός.'); }
+    const b = JSON.parse(payload);
+    await DB.kvSet('identity-pub', b.pub);
+    await DB.kvSet('identity-enc', b.enc);
+    await DB.kvDelete('identity');
+    if (Array.isArray(b.contacts)) for (const c of b.contacts) await DB.putContact(c);
+    await DB.kvSet('owner-token', token);
+    toast('Επαναφορά ολοκληρώθηκε!');
+    setTimeout(() => location.reload(), 1000);
   }
   async function exportBackup() {
     const encId = await DB.kvGet('identity-enc');
@@ -515,6 +577,11 @@
     $('#backupBtn').onclick = exportBackup;
     document.querySelectorAll('.restore-btn').forEach(b => b.onclick = () => $('#restoreFile').click());
     $('#restoreFile').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importBackup(f); });
+    // cloud backup (owner only)
+    $('#cloudBtn').onclick = () => { $('#settingsModal').classList.add('hidden'); $('#ownerTokenInput').value = ownerToken || ''; $('#cloudModal').classList.remove('hidden'); };
+    $('#enableCloud').onclick = async () => { const t = $('#ownerTokenInput').value.trim(); if (!t) return; if (await enableCloud(t)) $('#cloudModal').classList.add('hidden'); };
+    document.querySelectorAll('.cloud-restore-btn').forEach(b => b.onclick = () => { $('#crToken').value = ''; $('#crPass').value = ''; $('#cloudRestoreModal').classList.remove('hidden'); });
+    $('#doCloudRestore').onclick = () => { const t = $('#crToken').value.trim(), p = $('#crPass').value; if (!t || !p) return toast('Συμπλήρωσε token και κωδικό.'); cloudRestore(t, p); };
     $('#showQrBtn').onclick = showMyQr;
     $('#scanBtn').onclick = startScan;
     $('#confirmAdd').onclick = confirmAdd;
@@ -568,9 +635,12 @@
   // --- boot -----------------------------------------------------------------
   async function startApp() {
     $('#onboarding').classList.add('hidden');
+    $('#lock').classList.add('hidden');
     $('#app').classList.remove('hidden');
     setAvatar($('#myAvatar'), me.name, me.id);
     $('#myName').textContent = me.name;
+    ownerToken = (await DB.kvGet('owner-token')) || null;
+    fetch('/cloud-status').then(r => r.json()).then(s => { cloudEnabled = !!(s && s.enabled); }).catch(() => {});
     await sweepExpired();
     await loadContacts();
     updateBadge(unreadTotal());

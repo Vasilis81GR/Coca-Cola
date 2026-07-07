@@ -107,6 +107,21 @@ const C = (() => {
     return { signPriv: b64urlToBuf(obj.signPriv), dhPriv: b64urlToBuf(obj.dhPriv) };
   }
 
+  // Seal/open an arbitrary string with a password (for the cloud backup blob).
+  async function sealWithPassword(password, plaintext) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await passKey(password, salt);
+    const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+    return JSON.stringify({ salt: b64url(salt), iv: b64url(iv), data: b64url(data) });
+  }
+  async function openWithPassword(password, blobStr) {
+    const box = JSON.parse(blobStr);
+    const key = await passKey(password, new Uint8Array(b64urlToBuf(box.salt)));
+    const data = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(b64urlToBuf(box.iv)) }, key, b64urlToBuf(box.data));
+    return dec.decode(data);
+  }
+
   async function encrypt(aesKey, plaintext) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, enc.encode(plaintext));
@@ -119,5 +134,5 @@ const C = (() => {
     return dec.decode(data);
   }
 
-  return { generateIdentity, fingerprint, identityCard, signNonce, deriveKey, encrypt, decrypt, wrapIdentity, unwrapIdentity, b64url, b64urlToBuf };
+  return { generateIdentity, fingerprint, identityCard, signNonce, deriveKey, encrypt, decrypt, wrapIdentity, unwrapIdentity, sealWithPassword, openWithPassword, b64url, b64urlToBuf };
 })();

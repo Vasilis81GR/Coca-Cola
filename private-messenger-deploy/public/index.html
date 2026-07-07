@@ -22,7 +22,8 @@
       <label>Ο κωδικός σου</label>
       <input id="passInput" type="password" placeholder="" autocomplete="new-password" />
       <button id="createIdentity" class="primary">Δημιουργία ταυτότητας</button>
-      <button class="ghost restore-btn">Επαναφορά από backup</button>
+      <button class="ghost restore-btn">Επαναφορά από αρχείο</button>
+      <button class="ghost cloud-restore-btn">☁️ Cloud επαναφορά (owner)</button>
       <p class="tiny muted">Τα κλειδιά σου δημιουργούνται & κρυπτογραφούνται με τον κωδικό σου σε αυτή τη συσκευή. Αν ξεχάσεις τον κωδικό, χάνεται η ταυτότητα.</p>
     </div>
   </section>
@@ -38,7 +39,8 @@
       <input id="lockPass" type="password" placeholder="" autocomplete="current-password" />
       <button id="unlockBtn" class="primary">Είσοδος</button>
       <div id="lockErr" class="tiny err hidden">Λάθος κωδικός.</div>
-      <button class="ghost restore-btn">Επαναφορά από backup</button>
+      <button class="ghost restore-btn">Επαναφορά από αρχείο</button>
+      <button class="ghost cloud-restore-btn">☁️ Cloud επαναφορά (owner)</button>
     </div>
   </section>
   <input id="restoreFile" type="file" accept="application/json,.json,.pmid" hidden />
@@ -110,7 +112,35 @@
       <button id="enableNotif" class="ghost">🔔 Ενεργοποίηση ειδοποιήσεων</button>
       <button id="setPassBtn" class="ghost">🔑 Όρισε / άλλαξε κωδικό</button>
       <button id="backupBtn" class="ghost">💾 Backup ταυτότητας (αρχείο)</button>
+      <button id="cloudBtn" class="ghost">☁️ Cloud backup (owner)</button>
       <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <!-- Cloud backup enable (owner) -->
+  <div id="cloudModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Cloud backup (owner)</h2>
+      <p class="muted tiny">Μόνο για τον ιδιοκτήτη. Βάλε το master token — οι επαφές σου θα σώζονται κρυπτογραφημένα στον server σου, ώστε να τις ανακτάς σε νέα συσκευή.</p>
+      <input id="ownerTokenInput" type="password" placeholder="Master token" autocomplete="off" />
+      <div class="row">
+        <button class="ghost close-modal">Άκυρο</button>
+        <button id="enableCloud" class="primary">Ενεργοποίηση</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cloud restore (owner) -->
+  <div id="cloudRestoreModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Cloud επαναφορά (owner)</h2>
+      <p class="muted tiny">Μόνο ο ιδιοκτήτης. Βάλε το master token και τον κωδικό σου.</p>
+      <input id="crToken" type="password" placeholder="Master token" autocomplete="off" />
+      <input id="crPass" type="password" placeholder="Ο κωδικός σου" autocomplete="off" style="margin-top:8px" />
+      <div class="row">
+        <button class="ghost close-modal">Άκυρο</button>
+        <button id="doCloudRestore" class="primary">Επαναφορά</button>
+      </div>
     </div>
   </div>
 
