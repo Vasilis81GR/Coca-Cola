@@ -3,7 +3,7 @@
  * offline (you can read old messages; sending needs a connection).
  * Bump CACHE when you change any static file.
  */
-const CACHE = 'pm-v11';
+const CACHE = 'pm-v14';
 const SHELL = [
   '/', '/index.html', '/style.css', '/crypto.js', '/db.js', '/app.js',
   '/vendor/jsQR.js', '/manifest.json', '/logo.svg',

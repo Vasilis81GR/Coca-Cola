@@ -167,11 +167,12 @@
     await DB.putMessage(msg); updateTick(msg);
   }
   async function onReadReceipt(m) {
+    const exp = m.expireAt || (Date.now() + EPHEMERAL_MS);
     for (const mid of (m.mids || [])) {
       const msg = await DB.getMessage(mid);
       if (msg && msg.dir === 'out') {
         msg.status = 'read';
-        if (!msg.expireAt) { msg.readAt = Date.now(); msg.expireAt = msg.readAt + EPHEMERAL_MS; }
+        if (!msg.expireAt) { msg.readAt = Date.now(); msg.expireAt = exp; }  // same instant as the reader
         await DB.putMessage(msg); updateTick(msg); markExpiring(msg);
       }
     }
@@ -202,16 +203,18 @@
   // --- disappearing messages ------------------------------------------------
   // Mark given incoming messages as read: start their 30' countdown + tell sender.
   async function markRead(peerId, msgs) {
-    const mids = [];
+    const now = Date.now(), exp = now + EPHEMERAL_MS;
+    const newMids = [];
     for (const msg of msgs) {
       if (msg.dir !== 'in') continue;
       if (!msg.expireAt) {
-        msg.readAt = Date.now(); msg.expireAt = msg.readAt + EPHEMERAL_MS;
+        msg.readAt = now; msg.expireAt = exp;
         await DB.putMessage(msg); markExpiring(msg);
+        newMids.push(msg.mid);
       }
-      mids.push(msg.mid);
     }
-    if (mids.length) wsSend({ type: 'read', to: peerId, mids });
+    // send the receipt with the exact expiry so BOTH sides delete at the same time
+    if (newMids.length) wsSend({ type: 'read', to: peerId, mids: newMids, expireAt: exp });
   }
   // Reflect an expireAt onto the DOM node so the ticker shows a countdown.
   function markExpiring(msg) {
