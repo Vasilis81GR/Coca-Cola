@@ -1,0 +1,28 @@
+# One-command deploy with automatic HTTPS.
+# Edit Caddyfile with your real domain first, then:  docker compose up -d
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - queue-data:/app/server/data      # keeps the offline message queue across restarts
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  queue-data:
+  caddy-data:
+  caddy-config:

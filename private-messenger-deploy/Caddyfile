@@ -1,0 +1,16 @@
+# Caddy gives you automatic, free HTTPS (Let's Encrypt).
+# HTTPS is REQUIRED — the phone camera (QR scanning) only works on https:// or localhost.
+#
+# Setup:
+#   1) Point a domain's DNS A record at your server's public IP.
+#   2) Replace chat.example.com below with your domain.
+#
+# The upstream address depends on how you run the Node server:
+#   - docker compose (recommended):  reverse_proxy app:8080     <-- default below
+#   - Caddy on the same host as node: reverse_proxy localhost:8080
+#
+# Caddy proxies BOTH the web app and the WebSocket automatically.
+
+chat.example.com {
+    reverse_proxy app:8080
+}

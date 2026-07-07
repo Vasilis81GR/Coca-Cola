@@ -1,0 +1,434 @@
+/*
+ * app.js — glue: identity, connection, QR pairing, chat.
+ */
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const enc = new TextEncoder(), dec = new TextDecoder();
+
+  let me = null;                 // { id, name, card, signPriv, dhPriv }
+  let ws = null, connected = false, reconnectTimer = null;
+  const keyCache = new Map();    // peerId -> AES CryptoKey
+  let contacts = new Map();      // id -> contact
+  let currentPeer = null;        // open conversation id
+  let scanStream = null, scanRAF = null;
+  let pendingAdd = null;         // card awaiting confirmation
+
+  // --- utilities ------------------------------------------------------------
+  const encodeCard = (card) => C.b64url(enc.encode(JSON.stringify(card)));
+  const decodeCard = (p) => JSON.parse(dec.decode(C.b64urlToBuf(p)));
+  const identityLink = (card) => `${location.origin}/#add=${encodeCard(card)}`;
+
+  function avatarColor(id) {
+    let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360;
+    return `hsl(${h} 55% 45%)`;
+  }
+  function setAvatar(el, name, id) {
+    el.textContent = (name || '?').trim().charAt(0).toUpperCase();
+    el.style.background = avatarColor(id || name || 'x');
+  }
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' });
+  }
+  function fmtDay(ts) {
+    const d = new Date(ts), now = new Date();
+    if (d.toDateString() === now.toDateString()) return 'Σήμερα';
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (d.toDateString() === y.toDateString()) return 'Χθες';
+    return d.toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 2600);
+  }
+
+  // --- identity -------------------------------------------------------------
+  async function loadOrCreateIdentity() {
+    const saved = await DB.kvGet('identity');
+    if (saved) { me = saved; return true; }
+    return false;
+  }
+  async function createIdentity(name) {
+    const bundle = await C.generateIdentity();
+    const card = await C.identityCard(bundle, name);
+    me = { id: card.id, name, card, signPriv: bundle.signPriv, dhPriv: bundle.dhPriv };
+    await DB.kvSet('identity', me);
+  }
+
+  // --- per-contact key ------------------------------------------------------
+  async function keyFor(peer) {
+    if (keyCache.has(peer.id)) return keyCache.get(peer.id);
+    const k = await C.deriveKey(me.dhPriv, peer.epk, me.id, peer.id);
+    keyCache.set(peer.id, k);
+    return k;
+  }
+
+  // --- websocket ------------------------------------------------------------
+  function connect() {
+    clearTimeout(reconnectTimer);
+    const url = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
+    ws = new WebSocket(url);
+    setConn('σύνδεση…');
+
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', id: me.id, spk: me.card.spk }));
+
+    ws.onmessage = async (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === 'challenge') {
+        const sig = await C.signNonce(me.signPriv, m.nonce);
+        ws.send(JSON.stringify({ type: 'auth', sig }));
+      } else if (m.type === 'ready') {
+        connected = true; setConn('συνδεδεμένος');
+        resendPending();
+        if (currentPeer) probePresence(currentPeer);
+      } else if (m.type === 'msg') {
+        await onIncoming(m);
+      } else if (m.type === 'ack') {
+        await onAck(m);
+      } else if (m.type === 'typing') {
+        if (m.from === currentPeer) showTyping(m.on);
+      } else if (m.type === 'read') {
+        await onReadReceipt(m);
+      } else if (m.type === 'presence') {
+        if (m.id === currentPeer) $('#peerState').textContent = m.online ? 'online' : 'εκτός σύνδεσης';
+      }
+    };
+
+    ws.onclose = () => {
+      connected = false; setConn('εκτός σύνδεσης');
+      reconnectTimer = setTimeout(connect, 2500);
+    };
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  }
+  function wsSend(obj) { if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(obj)); return true; } return false; }
+  function setConn(t) { const e = $('#connState'); if (e) e.textContent = t; }
+  function probePresence(id) { wsSend({ type: 'ping-presence', id }); }
+
+  // --- sending --------------------------------------------------------------
+  async function sendMessage(text) {
+    const peer = contacts.get(currentPeer);
+    if (!peer || !text.trim()) return;
+    const mid = crypto.randomUUID();
+    const msg = { mid, peer: peer.id, dir: 'out', text, ts: Date.now(), status: 'sending' };
+    await DB.putMessage(msg);
+    appendMessage(msg); scrollDown();
+    await bumpContact(peer.id, text, msg.ts);
+    const key = await keyFor(peer);
+    const ct = await C.encrypt(key, text);
+    if (!wsSend({ type: 'msg', to: peer.id, mid, ct })) {
+      // offline: stays 'sending', resent on reconnect
+    }
+  }
+  async function resendPending() {
+    // resend any outgoing messages that never got an ack
+    for (const peer of contacts.values()) {
+      const msgs = await DB.messagesFor(peer.id);
+      for (const m of msgs) {
+        if (m.dir === 'out' && m.status === 'sending') {
+          const key = await keyFor(peer);
+          const ct = await C.encrypt(key, m.text);
+          wsSend({ type: 'msg', to: peer.id, mid: m.mid, ct });
+        }
+      }
+    }
+  }
+  async function onAck(m) {
+    const msg = await DB.getMessage(m.mid);
+    if (!msg) return;
+    msg.status = m.status === 'delivered' ? 'delivered' : 'queued';
+    await DB.putMessage(msg);
+    updateTick(msg);
+  }
+  async function onReadReceipt(m) {
+    for (const mid of (m.mids || [])) {
+      const msg = await DB.getMessage(mid);
+      if (msg && msg.dir === 'out') { msg.status = 'read'; await DB.putMessage(msg); updateTick(msg); }
+    }
+  }
+
+  // --- receiving ------------------------------------------------------------
+  async function onIncoming(m) {
+    const peer = contacts.get(m.from);
+    if (!peer) return; // message from someone not in your contacts -> ignored
+    let text;
+    try { text = await C.decrypt(await keyFor(peer), m.ct); }
+    catch { text = '⚠️ (αποτυχία αποκρυπτογράφησης)'; }
+    const msg = { mid: m.mid || crypto.randomUUID(), peer: peer.id, dir: 'in', text, ts: m.ts || Date.now() };
+    await DB.putMessage(msg);
+    await bumpContact(peer.id, text, msg.ts, currentPeer !== peer.id);
+    if (currentPeer === peer.id) {
+      appendMessage(msg); scrollDown();
+      wsSend({ type: 'read', to: peer.id, mids: [msg.mid] });
+    } else {
+      toast(`${peer.name}: ${text.slice(0, 40)}`);
+      notify(peer.name, text);
+    }
+  }
+
+  function notify(title, body) {
+    if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+      try { new Notification(title, { body, icon: '/icons/icon-192.png' }); } catch {}
+    }
+  }
+
+  // --- contacts model + list ------------------------------------------------
+  async function loadContacts() {
+    const list = await DB.allContacts();
+    contacts = new Map(list.map(c => [c.id, c]));
+    renderContacts();
+  }
+  async function bumpContact(id, last, ts, unread) {
+    const c = contacts.get(id); if (!c) return;
+    c.last = last; c.lastTs = ts;
+    if (unread) c.unread = (c.unread || 0) + 1;
+    await DB.putContact(c);
+    renderContacts();
+  }
+  function renderContacts() {
+    const wrap = $('#contactList'); wrap.innerHTML = '';
+    const list = [...contacts.values()].sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0));
+    $('#emptyContacts').classList.toggle('hidden', list.length > 0);
+    for (const c of list) {
+      const el = document.createElement('div');
+      el.className = 'contact' + (c.id === currentPeer ? ' active' : '');
+      el.innerHTML = `
+        <div class="avatar"></div>
+        <div class="info">
+          <div class="name">${escapeHtml(c.name)}</div>
+          <div class="last">${c.last ? escapeHtml(c.last) : 'Νέα επαφή'}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="time">${c.lastTs ? fmtTime(c.lastTs) : ''}</div>
+          ${c.unread ? `<div class="badge">${c.unread}</div>` : ''}
+        </div>`;
+      setAvatar(el.querySelector('.avatar'), c.name, c.id);
+      el.onclick = () => openConversation(c.id);
+      wrap.appendChild(el);
+    }
+  }
+
+  // --- conversation ---------------------------------------------------------
+  async function openConversation(id) {
+    currentPeer = id;
+    const peer = contacts.get(id);
+    peer.unread = 0; await DB.putContact(peer);
+    $('#chat').classList.remove('no-peer');
+    $('#app').classList.add('show-chat');
+    $('#peerName').textContent = peer.name;
+    setAvatar($('#peerAvatar'), peer.name, peer.id);
+    $('#peerState').textContent = '';
+    probePresence(id);
+    const msgs = await DB.messagesFor(id);
+    const box = $('#messages'); box.innerHTML = '';
+    let lastDay = '';
+    const unreadMids = [];
+    for (const m of msgs) {
+      const day = fmtDay(m.ts);
+      if (day !== lastDay) { addDaySep(day); lastDay = day; }
+      appendMessage(m);
+      if (m.dir === 'in') unreadMids.push(m.mid);
+    }
+    scrollDown();
+    renderContacts();
+    if (unreadMids.length) wsSend({ type: 'read', to: id, mids: unreadMids });
+  }
+
+  function addDaySep(text) {
+    const d = document.createElement('div'); d.className = 'daysep'; d.textContent = text;
+    $('#messages').appendChild(d);
+  }
+  function appendMessage(m) {
+    const el = document.createElement('div');
+    el.className = 'msg ' + m.dir; el.dataset.mid = m.mid;
+    el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>
+      <div class="meta">${fmtTime(m.ts)}${m.dir === 'out' ? `<span class="tick">${tick(m.status)}</span>` : ''}</div>`;
+    $('#messages').appendChild(el);
+  }
+  function tick(status) {
+    if (status === 'read') return '✓✓';
+    if (status === 'delivered') return '✓✓';
+    if (status === 'queued') return '✓';
+    return '🕓';
+  }
+  function updateTick(msg) {
+    const el = document.querySelector(`.msg[data-mid="${msg.mid}"] .tick`);
+    if (el) { el.textContent = tick(msg.status); el.style.color = msg.status === 'read' ? '#8fd' : ''; }
+  }
+  function scrollDown() { const b = $('#messages'); b.scrollTop = b.scrollHeight; }
+  let typingHideTimer;
+  function showTyping(on) {
+    const t = $('#typing');
+    if (on) { t.textContent = 'πληκτρολογεί…'; t.classList.remove('hidden'); clearTimeout(typingHideTimer); typingHideTimer = setTimeout(() => t.classList.add('hidden'), 4000); }
+    else t.classList.add('hidden');
+  }
+
+  // --- QR: show mine --------------------------------------------------------
+  function showMyQr() {
+    $('#qrImg').src = '/qr?data=' + encodeURIComponent(identityLink(me.card));
+    $('#myIdShort').textContent = 'ID: ' + me.id;
+    $('#qrModal').classList.remove('hidden');
+  }
+
+  // --- QR: scan -------------------------------------------------------------
+  async function startScan() {
+    $('#scanModal').classList.remove('hidden');
+    $('#scanStatus').textContent = '';
+    try {
+      scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const v = $('#scanVideo'); v.srcObject = scanStream; await v.play();
+      scanLoop();
+    } catch (e) {
+      $('#scanStatus').textContent = 'Δεν έχω πρόσβαση στην κάμερα. Έλεγξε τα permissions (χρειάζεται HTTPS).';
+    }
+  }
+  function scanLoop() {
+    const v = $('#scanVideo');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const tick = () => {
+      if (!scanStream) return;
+      if (v.readyState === v.HAVE_ENOUGH_DATA) {
+        canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) { handleScanned(code.data); return; }
+      }
+      scanRAF = requestAnimationFrame(tick);
+    };
+    scanRAF = requestAnimationFrame(tick);
+  }
+  function stopScan() {
+    if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null;
+    if (scanStream) { scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+  }
+  function handleScanned(data) {
+    stopScan(); $('#scanModal').classList.add('hidden');
+    const card = parseIdentity(data);
+    if (!card) return toast('Μη έγκυρο QR.');
+    promptAdd(card);
+  }
+  function parseIdentity(data) {
+    try {
+      let payload = data;
+      const i = data.indexOf('#add=');
+      if (i >= 0) payload = data.slice(i + 5);
+      const card = decodeCard(payload);
+      if (card && card.spk && card.epk && card.id) return card;
+    } catch {}
+    return null;
+  }
+
+  // --- add contact ----------------------------------------------------------
+  function promptAdd(card) {
+    if (card.id === me.id) return toast('Αυτό είναι το δικό σου QR 🙂');
+    pendingAdd = card;
+    setAvatar($('#addAvatar'), card.n, card.id);
+    $('#addName').textContent = card.n || 'Χωρίς όνομα';
+    $('#addId').textContent = 'ID: ' + card.id;
+    $('#confirmAdd').textContent = contacts.has(card.id) ? 'Ενημέρωση' : 'Προσθήκη';
+    $('#addModal').classList.remove('hidden');
+  }
+  async function confirmAdd() {
+    if (!pendingAdd) return;
+    const existing = contacts.get(pendingAdd.id) || {};
+    const c = { id: pendingAdd.id, name: pendingAdd.n || 'Χωρίς όνομα', spk: pendingAdd.spk, epk: pendingAdd.epk,
+      addedAt: existing.addedAt || Date.now(), last: existing.last, lastTs: existing.lastTs, unread: existing.unread };
+    keyCache.delete(c.id);
+    await DB.putContact(c);
+    contacts.set(c.id, c);
+    $('#addModal').classList.add('hidden'); pendingAdd = null;
+    renderContacts();
+    toast('Η επαφή προστέθηκε.');
+    openConversation(c.id);
+  }
+
+  // --- escape ---------------------------------------------------------------
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+  // --- events ---------------------------------------------------------------
+  function wireEvents() {
+    $('#createIdentity').onclick = async () => {
+      const name = $('#nameInput').value.trim() || 'Anonymous';
+      $('#createIdentity').disabled = true;
+      await createIdentity(name);
+      await startApp();
+    };
+    $('#nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#createIdentity').click(); });
+
+    $('#showQrBtn').onclick = showMyQr;
+    $('#scanBtn').onclick = startScan;
+    $('#confirmAdd').onclick = confirmAdd;
+    $('#backBtn').onclick = () => { $('#app').classList.remove('show-chat'); currentPeer = null; renderContacts(); };
+
+    document.querySelectorAll('.close-modal').forEach(b => b.onclick = () => {
+      stopScan();
+      b.closest('.modal').classList.add('hidden');
+    });
+
+    $('#sendBtn').onclick = () => { const i = $('#msgInput'); const v = i.value; i.value = ''; i.focus(); if (v.trim()) sendMessage(v); };
+    $('#msgInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#sendBtn').click(); });
+    let typingSent = 0;
+    $('#msgInput').addEventListener('input', () => {
+      if (!currentPeer) return;
+      const now = Date.now();
+      if (now - typingSent > 2000) { wsSend({ type: 'typing', to: currentPeer, on: true }); typingSent = now; }
+    });
+
+    $('#peerMenuBtn').onclick = () => {
+      if (!currentPeer) return;
+      $('#peerMenuName').textContent = contacts.get(currentPeer).name;
+      $('#peerMenu').classList.remove('hidden');
+    };
+    $('#clearChat').onclick = async () => {
+      if (!currentPeer) return;
+      await DB.deleteConversation(currentPeer);
+      const c = contacts.get(currentPeer); c.last = null; c.lastTs = null; await DB.putContact(c);
+      $('#messages').innerHTML = ''; $('#peerMenu').classList.add('hidden'); renderContacts();
+      toast('Η συνομιλία καθαρίστηκε.');
+    };
+    $('#removeContact').onclick = async () => {
+      if (!currentPeer) return;
+      const id = currentPeer;
+      await DB.deleteConversation(id); await DB.delContact(id);
+      contacts.delete(id); keyCache.delete(id);
+      currentPeer = null; $('#chat').classList.add('no-peer'); $('#app').classList.remove('show-chat');
+      $('#peerMenu').classList.add('hidden'); renderContacts();
+      toast('Η επαφή διαγράφηκε.');
+    };
+
+    // deep link: opened via scanned link (#add=...)
+    window.addEventListener('hashchange', handleHashAdd);
+  }
+  function handleHashAdd() {
+    if (location.hash.startsWith('#add=')) {
+      const card = parseIdentity(location.hash);
+      history.replaceState(null, '', location.pathname);
+      if (card) promptAdd(card);
+    }
+  }
+
+  // --- boot -----------------------------------------------------------------
+  async function startApp() {
+    $('#onboarding').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+    setAvatar($('#myAvatar'), me.name, me.id);
+    $('#myName').textContent = me.name;
+    await loadContacts();
+    connect();
+    if ('Notification' in window && Notification.permission === 'default') {
+      setTimeout(() => Notification.requestPermission().catch(() => {}), 3000);
+    }
+    handleHashAdd();
+  }
+
+  async function main() {
+    wireEvents();
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    const has = await loadOrCreateIdentity();
+    if (has) await startApp();
+    else $('#onboarding').classList.remove('hidden');
+  }
+  main();
+})();

@@ -1,0 +1,12 @@
+# Render Blueprint — deploys the messenger on the FREE plan, no Docker needed.
+# On Render: New +  ->  Blueprint  ->  connect your repo  ->  Apply.
+services:
+  - type: web
+    name: private-messenger
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true

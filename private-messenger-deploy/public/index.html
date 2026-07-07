@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <title>Private Messenger</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- Onboarding -->
+  <section id="onboarding" class="screen hidden">
+    <div class="card">
+      <div class="logo">🔒</div>
+      <h1>Private Messenger</h1>
+      <p class="muted">Ιδιωτική συνομιλία, end-to-end κρυπτογραφημένη. Πρόσθεσε επαφές μόνο με σάρωση QR.</p>
+      <label>Το όνομά σου</label>
+      <input id="nameInput" type="text" placeholder="π.χ. Βασίλης" maxlength="40" autocomplete="off" />
+      <button id="createIdentity" class="primary">Δημιουργία ταυτότητας</button>
+      <p class="tiny muted">Τα κλειδιά σου δημιουργούνται σε αυτή τη συσκευή και δεν φεύγουν ποτέ από εδώ.</p>
+    </div>
+  </section>
+
+  <!-- Main app -->
+  <section id="app" class="screen hidden">
+    <aside id="sidebar">
+      <header class="bar">
+        <div class="me">
+          <div class="avatar" id="myAvatar"></div>
+          <div>
+            <div id="myName" class="name"></div>
+            <div id="connState" class="tiny muted">σύνδεση…</div>
+          </div>
+        </div>
+        <div class="bar-actions">
+          <button id="showQrBtn" title="Το QR μου" class="icon">▣</button>
+          <button id="scanBtn" title="Σάρωση QR" class="icon">＋</button>
+        </div>
+      </header>
+      <div id="contactList" class="contacts"></div>
+      <div id="emptyContacts" class="empty muted">
+        Δεν έχεις επαφές ακόμα.<br />Πάτα <b>＋</b> για να σκανάρεις το QR κάποιου,<br />ή <b>▣</b> για να δείξεις το δικό σου.
+      </div>
+    </aside>
+
+    <main id="chat" class="no-peer">
+      <header class="bar chat-bar">
+        <button id="backBtn" class="icon back">‹</button>
+        <div class="avatar sm" id="peerAvatar"></div>
+        <div class="peer-meta">
+          <div id="peerName" class="name"></div>
+          <div id="peerState" class="tiny muted"></div>
+        </div>
+        <button id="peerMenuBtn" class="icon">⋯</button>
+      </header>
+      <div id="messages" class="messages"></div>
+      <div id="typing" class="typing hidden"></div>
+      <footer class="composer">
+        <input id="msgInput" type="text" placeholder="Μήνυμα…" autocomplete="off" />
+        <button id="sendBtn" class="send">➤</button>
+      </footer>
+      <div id="noPeer" class="placeholder muted">
+        <div class="logo big">🔒</div>
+        Διάλεξε μια συνομιλία ή πρόσθεσε επαφή με QR.
+      </div>
+    </main>
+  </section>
+
+  <!-- My QR modal -->
+  <div id="qrModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Το QR μου</h2>
+      <p class="muted tiny">Δώσε το να το σκανάρει ο άλλος για να σε προσθέσει.</p>
+      <img id="qrImg" alt="QR" />
+      <div id="myIdShort" class="tiny muted mono"></div>
+      <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <!-- Scanner modal -->
+  <div id="scanModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Σάρωση QR</h2>
+      <p class="muted tiny">Στόχευσε το QR της άλλης συσκευής.</p>
+      <div class="scanner-wrap">
+        <video id="scanVideo" playsinline muted></video>
+        <div class="scan-frame"></div>
+      </div>
+      <div id="scanStatus" class="tiny muted"></div>
+      <button class="ghost close-modal">Άκυρο</button>
+    </div>
+  </div>
+
+  <!-- Confirm add modal -->
+  <div id="addModal" class="modal hidden">
+    <div class="modal-card">
+      <h2>Προσθήκη επαφής</h2>
+      <div class="avatar big center" id="addAvatar"></div>
+      <div id="addName" class="name center"></div>
+      <div id="addId" class="tiny muted mono center"></div>
+      <div class="row">
+        <button class="ghost close-modal">Άκυρο</button>
+        <button id="confirmAdd" class="primary">Προσθήκη</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Peer menu -->
+  <div id="peerMenu" class="modal hidden">
+    <div class="modal-card">
+      <h2 id="peerMenuName"></h2>
+      <button id="clearChat" class="ghost">Καθαρισμός συνομιλίας</button>
+      <button id="removeContact" class="danger">Διαγραφή επαφής</button>
+      <button class="ghost close-modal">Κλείσιμο</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/vendor/jsQR.js"></script>
+  <script src="/crypto.js"></script>
+  <script src="/db.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

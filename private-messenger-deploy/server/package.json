@@ -1,0 +1,16 @@
+{
+  "name": "private-messenger-server",
+  "version": "1.0.0",
+  "description": "Self-hosted relay for a private, end-to-end encrypted messenger.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.22.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.21.0"
+  }
+}
